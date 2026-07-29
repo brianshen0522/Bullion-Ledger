@@ -61,6 +61,10 @@
     @apply border-slate-300 bg-white text-slate-950 shadow-sm dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100;
   }
 
+  input[type="datetime-local"] {
+    line-height: normal;
+  }
+
   input::placeholder,
   textarea::placeholder {
     @apply text-slate-400 dark:text-slate-500;
