@@ -50,7 +50,13 @@ export class AssetsService {
       dto.purity === undefined &&
       dto.allocatedCost === undefined &&
       dto.serial === undefined &&
-      dto.storageLocation === undefined
+      dto.storageLocation === undefined &&
+      dto.name === undefined &&
+      dto.brand === undefined &&
+      dto.country === undefined &&
+      dto.yearOrVersion === undefined &&
+      dto.packagingState === undefined &&
+      dto.hasCertificate === undefined
     ) {
       throw new BadRequestException('No changes provided');
     }
@@ -151,20 +157,43 @@ export class AssetsService {
       if (dto.storageLocation !== undefined)
         data.storageLocation = nullableString(dto.storageLocation);
 
+      // Descriptive fields on the PurchaseItem snapshot (for non-catalog assets).
+      const itemData: Record<string, unknown> = {};
+      if (dto.name !== undefined) itemData.name = nullableString(dto.name) ?? '未命名資產';
+      if (dto.brand !== undefined) itemData.brand = nullableString(dto.brand);
+      if (dto.country !== undefined) itemData.country = nullableString(dto.country);
+      if (dto.yearOrVersion !== undefined) itemData.yearOrVersion = nullableString(dto.yearOrVersion);
+      if (dto.packagingState !== undefined) itemData.packagingState = nullableString(dto.packagingState);
+      if (dto.hasCertificate !== undefined) itemData.hasCertificate = dto.hasCertificate;
+
       // Reject semantic no-op — every computed data value must differ from the
-      // current persisted state (after canonicalization).
-      if (!Object.keys(data).some((key) => fieldDiffers(key, data[key], before))) {
+      // current persisted state (after canonicalization), or item fields changed.
+      const assetChanged = Object.keys(data).some((key) => fieldDiffers(key, data[key], before));
+      const itemChanged =
+        before.purchaseItemId !== null &&
+        Object.keys(itemData).length > 0 &&
+        Object.keys(itemData).some((key) => itemFieldDiffers(key, itemData[key], before.purchaseItem));
+      if (!assetChanged && !itemChanged) {
         throw new BadRequestException('No changes provided');
       }
 
-      const { count } = await tx.asset.updateMany({
-        where: { id, version: before.version },
-        data: { ...data, version: { increment: 1 } },
-      });
-      if (count === 0) {
-        throw new ConflictException(
-          `Asset ${id} was updated by another request; refresh and retry`,
-        );
+      if (assetChanged) {
+        const { count } = await tx.asset.updateMany({
+          where: { id, version: before.version },
+          data: { ...data, version: { increment: 1 } },
+        });
+        if (count === 0) {
+          throw new ConflictException(
+            `Asset ${id} was updated by another request; refresh and retry`,
+          );
+        }
+      }
+
+      if (itemChanged && before.purchaseItemId) {
+        await tx.purchaseItem.update({
+          where: { id: before.purchaseItemId },
+          data: itemData,
+        });
       }
 
       const updated = await tx.asset.findUnique({
@@ -213,6 +242,23 @@ function fieldDiffers(key: string, newValue: unknown, record: HeldAssetRecord): 
     }
   }
   return String(newValue) !== String(oldValue);
+}
+
+function itemFieldDiffers(
+  key: string,
+  newValue: unknown,
+  item: HeldAssetRecord['purchaseItem'],
+): boolean {
+  if (!item) return true;
+  const oldValue = (item as Record<string, unknown>)[key];
+  if (oldValue instanceof Decimal) {
+    try {
+      return !new Decimal(String(newValue)).eq(oldValue);
+    } catch {
+      return true;
+    }
+  }
+  return String(newValue) !== String(oldValue ?? '');
 }
 
 function nullableString(value: string | null | undefined): string | null {

@@ -238,6 +238,21 @@ export type HeldAssetListItem = {
     width: number | null;
     height: number | null;
   } | null;
+  photos: {
+    id: string;
+    kind: string;
+    isCover: boolean;
+    description: string | null;
+    filename: string;
+    mime: string;
+    variant: {
+      variant: string;
+      revision: number;
+      mime: string;
+      width: number | null;
+      height: number | null;
+    } | null;
+  }[];
 };
 export type OrganizationListItem = {
   id: string;
@@ -248,6 +263,29 @@ export type OrganizationListItem = {
   capabilities: ('BRAND' | 'ISSUER' | 'REFINER' | 'MINT' | 'MANUFACTURER' | 'ASSAYER')[];
   matchedAlias: string | null;
 };
+export type AssetAttachment = {
+  id: string;
+  version: number;
+  kind: string;
+  mediaClass: 'ASSET_PHOTO' | 'DOCUMENT';
+  captureSource: 'CAMERA' | 'LIBRARY';
+  status: 'READY' | 'NEEDS_REVIEW' | 'PROCESSING' | 'FAILED';
+  processingMode: string;
+  description: string | null;
+  filename: string;
+  mime: string;
+  verifiedMime: string | null;
+  sizeBytes: number;
+  width: number | null;
+  height: number | null;
+  pageCount: number | null;
+  processingMetadata: Record<string, unknown> | null;
+  userConfirmed: boolean;
+  isCover: boolean;
+  isSensitive: boolean;
+  variants: { kind: string; revision: number; mime: string; sizeBytes: number; width: number | null; height: number | null }[];
+};
+
 export type PurchaseListItem = {
   id: string;
   purchasedAt: string;

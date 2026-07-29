@@ -60,6 +60,44 @@ export class AttachmentsController {
     });
   }
 
+  @Post('assets/:assetId/attachments/upload')
+  async uploadForAsset(
+    @Param('assetId') assetId: string,
+    @Query() metadata: UploadAttachmentQueryDto,
+    @Headers('content-type') contentType: string | undefined,
+    @Headers('content-encoding') contentEncoding: string | undefined,
+    @Headers('x-filename') filename: string | undefined,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @CurrentUser() user: AuthContext | null,
+    @Req() req: Request,
+  ) {
+    const auth = requireUser(user);
+    if (!contentType) throw new UnsupportedMediaTypeException('Content-Type is required');
+    if (contentEncoding && contentEncoding.toLowerCase() !== 'identity') {
+      throw new UnsupportedMediaTypeException('Compressed request bodies are not accepted');
+    }
+    if (!filename) throw new BadRequestException('X-Filename is required');
+    const bytes = await readBoundedRawBody(req, this.attachments.maxRawUploadBytes(contentType));
+    return this.attachments.uploadForAsset({
+      assetId,
+      userId: auth.userId,
+      filename,
+      declaredMime: contentType,
+      idempotencyKey: requireIdempotencyKey(idempotencyKey),
+      bytes,
+      metadata,
+      auditContext: auditContext(auth, req),
+    });
+  }
+
+  @Get('assets/:assetId/attachments')
+  listAssetAttachments(
+    @Param('assetId') assetId: string,
+    @CurrentUser() user: AuthContext | null,
+  ) {
+    return this.attachments.listForAsset(requireUser(user).userId, assetId);
+  }
+
   @Post('attachments/:id/variants/upload')
   async uploadVariant(
     @Param('id') id: string,

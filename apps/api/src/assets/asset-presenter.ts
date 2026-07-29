@@ -37,6 +37,11 @@ export const HELD_ASSET_INCLUDE = {
       id: true,
       kind: true,
       isCover: true,
+      status: true,
+      mediaClass: true,
+      description: true,
+      filename: true,
+      mime: true,
       variants: {
         where: { kind: { in: ['THUMBNAIL', 'CROPPED', 'ORIGINAL'] } },
         orderBy: [{ revision: 'desc' }],
@@ -100,12 +105,38 @@ export function presentHeldAsset(asset: HeldAssetRecord) {
         }
       : null,
     coverPhoto,
+    photos: asset.attachments.map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      isCover: a.isCover,
+      description: a.description,
+      filename: a.filename,
+      mime: a.mime,
+      variant: bestVariant(a.variants),
+    })),
     version: asset.version,
     updatedAt: asset.updatedAt.toISOString(),
   };
 }
 
 const PHOTO_VARIANT_PRIORITY = ['THUMBNAIL', 'CROPPED', 'ORIGINAL'] as const;
+
+function bestVariant(
+  variants: { kind: string; revision: number; mime: string; width: number | null; height: number | null }[],
+) {
+  for (const kind of PHOTO_VARIANT_PRIORITY) {
+    const variant = variants.find((v) => v.kind === kind);
+    if (!variant) continue;
+    return {
+      variant: kind,
+      revision: variant.revision,
+      mime: variant.mime,
+      width: variant.width,
+      height: variant.height,
+    };
+  }
+  return null;
+}
 
 function presentCoverPhoto(attachments: HeldAssetRecord['attachments']) {
   // New uploads have one explicit cover per asset. The front/oldest fallbacks

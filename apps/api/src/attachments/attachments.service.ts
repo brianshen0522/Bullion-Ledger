@@ -36,6 +36,7 @@ import {
   type AttachmentWithVariants,
 } from './attachment-presenter.js';
 
+const DEFAULT_ASSET_MAX_ATTACHMENTS = 200;
 const DEFAULT_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const DEFAULT_PDF_MAX_BYTES = 50 * 1024 * 1024;
 const DEFAULT_INTAKE_MAX_BYTES = 250 * 1024 * 1024;
@@ -54,10 +55,22 @@ interface AttachmentLimits {
   maxPixels: number;
   derivativeMaxRevisions: number;
   derivativeMaxBytes: number;
+  assetMaxAttachments: number;
 }
 
 interface UploadInput {
   intakeId: string;
+  userId: string;
+  filename: string;
+  declaredMime: string;
+  idempotencyKey: string;
+  bytes: Uint8Array;
+  metadata: UploadAttachmentQueryDto;
+  auditContext?: PurchaseAuditContext;
+}
+
+interface AssetUploadInput {
+  assetId: string;
   userId: string;
   filename: string;
   declaredMime: string;
@@ -118,6 +131,12 @@ export class AttachmentsService {
         DEFAULT_DERIVATIVE_MAX_BYTES,
         1,
         2_000 * 1024 * 1024,
+      ),
+      assetMaxAttachments: parseLimit(
+        config.get<string>('ASSET_MAX_ATTACHMENTS'),
+        DEFAULT_ASSET_MAX_ATTACHMENTS,
+        1,
+        10_000,
       ),
     };
   }
@@ -336,6 +355,190 @@ export class AttachmentsService {
     }
   }
 
+  async uploadForAsset(input: AssetUploadInput) {
+    if (!input.bytes.byteLength) throw new BadRequestException('Attachment body is empty');
+    const filename = normalizeFilename(input.filename);
+    const detected = detectAcceptedMedia(input.bytes);
+    if (!detected) {
+      throw new BadRequestException(
+        'Only valid JPEG, PNG, WebP, HEIC/HEIF, or PDF files are accepted',
+      );
+    }
+    if (!declaredMimeMatches(detected.kind, input.declaredMime)) {
+      throw new BadRequestException('Declared Content-Type does not match the file signature');
+    }
+
+    const isPdf = detected.kind === 'PDF';
+    const fileLimit = isPdf ? this.limits.pdfMaxBytes : this.limits.imageMaxBytes;
+    if (input.bytes.byteLength > fileLimit) {
+      throw new PayloadTooLargeException(
+        `${isPdf ? 'PDF' : 'Image'} exceeds the configured upload limit`,
+      );
+    }
+    if (isPdf && input.metadata.mediaClass !== AttachmentMediaClass.DOCUMENT) {
+      throw new BadRequestException('PDF files must use mediaClass DOCUMENT');
+    }
+
+    let pageCount: number | null = null;
+    if (isPdf) {
+      pageCount = validatePdfAndEstimatePages(input.bytes);
+    } else {
+      try {
+        assertSafePixelCount(detected, this.limits.maxPixels);
+      } catch (error) {
+        throw new BadRequestException((error as Error).message);
+      }
+      if (detected.width === null || detected.height === null) {
+        throw new BadRequestException('Image dimensions could not be verified');
+      }
+    }
+
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: input.assetId },
+      select: { id: true, status: true },
+    });
+    if (!asset) throw new NotFoundException('Asset not found');
+    if (asset.status !== 'HELD') {
+      throw new BadRequestException('Only HELD assets can have attachments added');
+    }
+
+    const existingCount = await this.prisma.attachment.count({
+      where: { assetId: input.assetId, deletedAt: null },
+    });
+    if (existingCount >= this.limits.assetMaxAttachments) {
+      throw new PayloadTooLargeException('Asset attachment count limit exceeded');
+    }
+
+    const tags = normalizeTags(input.metadata.tags?.split(',') ?? []);
+    const processingMode =
+      input.metadata.processingMode ??
+      (input.metadata.mediaClass === AttachmentMediaClass.DOCUMENT
+        ? AttachmentProcessingMode.DOCUMENT_SCAN
+        : AttachmentProcessingMode.OBJECT_CROP);
+    validateMode(input.metadata.mediaClass, processingMode);
+    const isCover = input.metadata.isCover === 'true';
+    if (isCover && input.metadata.mediaClass !== AttachmentMediaClass.ASSET_PHOTO) {
+      throw new BadRequestException('Only asset photos can be marked as the cover');
+    }
+    const sha256 = sha256Hex(input.bytes);
+    const uploadKeyHash = hashUploadKey(input.userId, input.assetId, input.idempotencyKey);
+    const uploadRequestHash = hashUploadRequest({
+      sha256,
+      filename,
+      kind: input.metadata.kind,
+      mediaClass: input.metadata.mediaClass,
+      captureSource: input.metadata.captureSource,
+      clientMediaId: input.metadata.clientMediaId?.trim() || null,
+      processingMode,
+      description: input.metadata.description?.trim() || null,
+      tags,
+      isSensitive: input.metadata.isSensitive === 'true',
+      isCover,
+    });
+
+    const replay = await this.prisma.attachment.findUnique({
+      where: { uploadKeyHash },
+      include: ATTACHMENT_INCLUDE,
+    });
+    if (replay && replay.assetId === input.assetId) {
+      return presentAttachment(replay);
+    }
+
+    const storageKey = buildAssetStorageKey(input.userId, input.assetId, filename);
+    await this.storage.putObject({
+      storageKey,
+      mime: detected.mime,
+      body: input.bytes,
+      cacheControl: 'private, no-store',
+    });
+
+    try {
+      const attachment = await this.prisma.$transaction(async (tx) => {
+        if (isCover && input.metadata.mediaClass === AttachmentMediaClass.ASSET_PHOTO) {
+          await tx.attachment.updateMany({
+            where: { assetId: input.assetId, mediaClass: AttachmentMediaClass.ASSET_PHOTO, isCover: true },
+            data: { isCover: false },
+          });
+        }
+
+        const attachment = await tx.attachment.create({
+          data: {
+            assetId: input.assetId,
+            uploadedById: input.userId,
+            kind: input.metadata.kind.trim(),
+            mediaClass: input.metadata.mediaClass,
+            captureSource: input.metadata.captureSource,
+            status:
+              processingMode === AttachmentProcessingMode.NONE
+                ? AttachmentStatus.READY
+                : AttachmentStatus.NEEDS_REVIEW,
+            processingMode,
+            description: input.metadata.description?.trim() || null,
+            tags,
+            filename,
+            mime: normalizeDeclaredMime(input.declaredMime),
+            verifiedMime: detected.mime,
+            sizeBytes: input.bytes.byteLength,
+            sha256,
+            width: detected.width,
+            height: detected.height,
+            pageCount,
+            processingMetadata: {
+              detectedKind: detected.kind,
+              originalPreserved: true,
+              clientMediaId: input.metadata.clientMediaId?.trim() || null,
+            },
+            userConfirmed: processingMode === AttachmentProcessingMode.NONE,
+            uploadKeyHash,
+            uploadRequestHash,
+            storageKey,
+            isSensitive: input.metadata.isSensitive === 'true',
+            isCover,
+            variants: {
+              create: {
+                kind: AttachmentVariantKind.ORIGINAL,
+                revision: 1,
+                storageKey,
+                mime: detected.mime,
+                sizeBytes: input.bytes.byteLength,
+                sha256,
+                width: detected.width,
+                height: detected.height,
+                pageCount,
+              },
+            },
+          },
+          include: ATTACHMENT_INCLUDE,
+        });
+        await this.audit.recordInTransaction(tx, {
+          ...input.auditContext,
+          userId: input.userId,
+          action: 'attachment.upload',
+          resourceType: 'Attachment',
+          resourceId: attachment.id,
+          afterSummary: {
+            assetId: input.assetId,
+            mediaClass: attachment.mediaClass,
+            verifiedMime: attachment.verifiedMime,
+            sizeBytes: attachment.sizeBytes,
+          },
+        });
+        return attachment;
+      });
+      return presentAttachment(attachment);
+    } catch (error) {
+      await this.removeOrphan(storageKey);
+      if (isUniqueConflict(error, 'uploadKeyHash')) {
+        const winner = await this.prisma.attachment.findUnique({
+          where: { uploadKeyHash },
+          include: ATTACHMENT_INCLUDE,
+        });
+        if (winner && winner.assetId === input.assetId) return presentAttachment(winner);
+      }
+      throw error;
+    }
+  }
+
   async uploadVariant(
     userId: string,
     attachmentId: string,
@@ -349,7 +552,7 @@ export class AttachmentsService {
     }
     if (!bytes.byteLength) throw new BadRequestException('Attachment variant body is empty');
     const attachment = await this.requireAuthorized(userId, attachmentId, true);
-    assertMutableDraftAttachment(attachment, userId);
+    const scope = resolveMutableScope(attachment, userId);
     const detected = detectAcceptedMedia(bytes);
     if (!detected || !declaredMimeMatches(detected.kind, declaredMime)) {
       throw new BadRequestException(
@@ -401,7 +604,7 @@ export class AttachmentsService {
     let objectPersisted = false;
     try {
       const result = await this.prisma.$transaction(async (tx) => {
-        await lockDraftIntake(tx, attachment.intakeId!, userId);
+        await lockForMutation(tx, scope);
         // Updating the parent serializes revision assignment for concurrent
         // derivatives of the same attachment. The conditional prevents a
         // finalize/cancel race from mutating an attachment after its intake
@@ -410,7 +613,7 @@ export class AttachmentsService {
         // review before this transaction acquired the intake lock.
         const parent = await tx.attachment.updateMany({
           where: {
-            ...draftAttachmentMutationWhere(attachmentId, userId, attachment.intakeId!),
+            ...attachmentMutationWhere(attachmentId, scope),
             version: attachment.version,
           },
           data: { version: { increment: 1 } },
@@ -514,11 +717,10 @@ export class AttachmentsService {
     auditContext: PurchaseAuditContext = {},
   ) {
     const attachment = await this.requireAuthorized(userId, id, true);
-    assertMutableDraftAttachment(attachment, userId);
+    const scope = resolveMutableScope(attachment, userId);
     if (dto.version !== attachment.version) {
       throw new ConflictException('Attachment changed; reload the draft and try again');
     }
-    const intakeId = attachment.intakeId!;
 
     const mediaClass = dto.mediaClass ?? attachment.mediaClass;
     const processingMode = dto.processingMode ?? attachment.processingMode;
@@ -562,10 +764,16 @@ export class AttachmentsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      await lockDraftIntake(tx, intakeId, userId);
+      await lockForMutation(tx, scope);
+      if (dto.isCover === true && scope.kind === 'asset' && mediaClass === AttachmentMediaClass.ASSET_PHOTO) {
+        await tx.attachment.updateMany({
+          where: { assetId: scope.assetId, mediaClass: AttachmentMediaClass.ASSET_PHOTO, isCover: true, id: { not: id } },
+          data: { isCover: false },
+        });
+      }
       const result = await tx.attachment.updateMany({
         where: {
-          ...draftAttachmentMutationWhere(id, userId, intakeId),
+          ...attachmentMutationWhere(id, scope),
           version: dto.version,
         },
         data: {
@@ -619,13 +827,13 @@ export class AttachmentsService {
   async softDelete(userId: string, id: string, auditContext: PurchaseAuditContext = {}) {
     const attachment = await this.requireAuthorized(userId, id, false);
     if (attachment.deletedAt) return presentAttachment(attachment);
-    assertMutableDraftAttachment(attachment, userId);
+    const scope = resolveMutableScope(attachment, userId);
 
     const deletedAt = new Date();
     const deleted = await this.prisma.$transaction(async (tx) => {
-      await lockDraftIntake(tx, attachment.intakeId!, userId);
+      await lockForMutation(tx, scope);
       const result = await tx.attachment.updateMany({
-        where: draftAttachmentMutationWhere(id, userId, attachment.intakeId!),
+        where: attachmentMutationWhere(id, scope),
         data: { deletedAt, version: { increment: 1 }, isCover: false },
       });
       if (result.count !== 1) throw immutableAttachmentConflict();
@@ -645,6 +853,20 @@ export class AttachmentsService {
       return saved;
     });
     return presentAttachment(deleted);
+  }
+
+  async listForAsset(userId: string, assetId: string) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      select: { id: true, status: true },
+    });
+    if (!asset) throw new NotFoundException('Asset not found');
+    const attachments = await this.prisma.attachment.findMany({
+      where: { assetId, deletedAt: null },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      include: ATTACHMENT_INCLUDE,
+    });
+    return attachments.map(presentAttachment);
   }
 
   async issueReadUrl(
@@ -747,25 +969,53 @@ export class AttachmentsService {
   }
 }
 
-function assertMutableDraftAttachment(
+type MutableScope =
+  | { kind: 'intake'; intakeId: string; userId: string }
+  | { kind: 'asset'; assetId: string };
+
+function resolveMutableScope(
   attachment: {
     intakeId: string | null;
     purchaseId: string | null;
     assetId: string | null;
+    deletedAt: Date | null;
     intake: { userId: string; status: PurchaseIntakeStatus } | null;
   },
   userId: string,
-): void {
+): MutableScope {
   if (
-    !attachment.intakeId ||
-    attachment.purchaseId ||
-    attachment.assetId ||
-    !attachment.intake ||
-    attachment.intake.userId !== userId ||
-    attachment.intake.status !== PurchaseIntakeStatus.DRAFT
+    attachment.intakeId &&
+    !attachment.purchaseId &&
+    !attachment.assetId &&
+    attachment.intake &&
+    attachment.intake.userId === userId &&
+    attachment.intake.status === PurchaseIntakeStatus.DRAFT
   ) {
-    throw immutableAttachmentConflict();
+    return { kind: 'intake', intakeId: attachment.intakeId, userId };
   }
+  if (attachment.assetId && !attachment.deletedAt) {
+    return { kind: 'asset', assetId: attachment.assetId };
+  }
+  throw immutableAttachmentConflict();
+}
+
+async function lockForMutation(
+  tx: Prisma.TransactionClient,
+  scope: MutableScope,
+): Promise<void> {
+  if (scope.kind === 'intake') {
+    await lockDraftIntake(tx, scope.intakeId, scope.userId);
+  }
+}
+
+function attachmentMutationWhere(
+  id: string,
+  scope: MutableScope,
+): Prisma.AttachmentWhereInput {
+  if (scope.kind === 'intake') {
+    return draftAttachmentMutationWhere(id, scope.userId, scope.intakeId);
+  }
+  return { id, assetId: scope.assetId, deletedAt: null };
 }
 
 function immutableAttachmentConflict(): ConflictException {
@@ -897,6 +1147,11 @@ function validatePdfAndEstimatePages(bytes: Uint8Array): number | null {
 function buildStorageKey(userId: string, intakeId: string, filename: string): string {
   const safe = filename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128) || 'upload';
   return `intakes/${safeSegment(userId)}/${safeSegment(intakeId)}/${randomUUID()}/${safe}`;
+}
+
+function buildAssetStorageKey(userId: string, assetId: string, filename: string): string {
+  const safe = filename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128) || 'upload';
+  return `assets/${safeSegment(userId)}/${safeSegment(assetId)}/${randomUUID()}/${safe}`;
 }
 
 function buildVariantStorageKey(attachmentId: string, kind: AttachmentVariantKind): string {

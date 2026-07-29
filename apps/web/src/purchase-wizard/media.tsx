@@ -60,12 +60,15 @@ const PHOTO_TYPES = [
   ['serial', '序號'],
   ['security', '防偽標誌'],
   ['packaging', '包裝'],
+  ['invoice', '發票'],
+  ['warranty_card', '保卡'],
 ] as const;
 
 const DOCUMENT_TYPES = [
   ['invoice', '發票'],
   ['receipt', '收據'],
   ['certificate', '證書'],
+  ['warranty_card', '保卡'],
   ['order', '訂單'],
   ['transfer', '匯款證明'],
   ['appraisal', '鑑定文件'],

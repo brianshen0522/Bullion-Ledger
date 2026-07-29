@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsInt,
   IsOptional,
   IsString,
@@ -51,4 +52,33 @@ export class UpdateAssetDto {
   @IsString()
   @MaxLength(128)
   storageLocation?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  name?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  brand?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  country?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  yearOrVersion?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  packagingState?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  hasCertificate?: boolean;
 }
