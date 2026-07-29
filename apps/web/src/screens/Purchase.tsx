@@ -2,7 +2,7 @@ import { isWeightUnit } from '@bullion-ledger/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api, type Metal, type ProductDefinition, type PurchaseListItem } from '../api.js';
+import { api, isApiError, type Metal, type ProductDefinition, type PurchaseListItem } from '../api.js';
 import { searchOrganizationCatalog } from '../organization-search-provider.js';
 import {
   PurchaseWizard,
@@ -222,7 +222,20 @@ export function PurchaseScreen({ onDone }: { onDone: () => void }) {
               intake.current = null;
               return;
             }
-            throw error;
+            if (isApiError(error) && error.status === 409 && intake.current) {
+              const fresh = await api.get<PurchaseIntake>(`/purchase-intakes/${intake.current.id}`);
+              if (fresh.status === 'DRAFT') {
+                intake.current = { id: fresh.id, version: fresh.version };
+                updated = await api.patch<PurchaseIntake>(`/purchase-intakes/${intake.current.id}`, {
+                  version: fresh.version,
+                  ...body,
+                });
+              } else {
+                throw error;
+              }
+            } else {
+              throw error;
+            }
           }
           intake.current = { id: updated.id, version: updated.version };
         });
