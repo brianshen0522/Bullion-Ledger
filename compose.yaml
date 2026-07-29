@@ -219,6 +219,7 @@ services:
         condition: service_healthy
     environment:
       API_URL: http://api:3000
+      GATEWAY_SERVER_NAME: ${GATEWAY_SERVER_NAME:-}
     volumes:
       - ./apps/web/src:/workspace/apps/web/src
       - ./apps/web/index.html:/workspace/apps/web/index.html
