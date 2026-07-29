@@ -1,0 +1,20 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# This is a private application with a reviewed, frozen lockfile. Trusting the
+# lockfile lets clean/offline CI installs keep pnpm's integrity checks without
+# requiring live registry metadata for every transitive dependency.
+trustLockfile: true
+
+allowBuilds:
+  '@nestjs/core': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  argon2: true
+  esbuild: true
+  # Optional native accelerator behind BullMQ's msgpackr. Declining the build
+  # script keeps the toolchain free of another native compile; msgpackr falls
+  # back to its JavaScript encoder, which is ample at this queue volume.
+  msgpackr-extract: false
+  prisma: true

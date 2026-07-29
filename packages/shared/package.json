@@ -1,0 +1,32 @@
+{
+  "name": "@bullion-ledger/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json",
+    "dev": "tsc -p tsconfig.cjs.json --watch --preserveWatchOutput & tsc -p tsconfig.esm.json --watch --preserveWatchOutput & wait",
+    "typecheck": "tsc -p tsconfig.esm.json --noEmit",
+    "lint": "eslint . --config ../../eslint.config.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "decimal.js": "^10.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "eslint": "^9.14.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.5"
+  }
+}

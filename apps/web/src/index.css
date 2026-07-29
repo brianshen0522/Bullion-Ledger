@@ -1,0 +1,210 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  html {
+    background-color: #f8fafc;
+  }
+
+  html.dark {
+    background-color: #020617;
+  }
+
+  body {
+    @apply m-0 overflow-x-hidden bg-paper text-ink antialiased dark:bg-slate-950 dark:text-slate-100;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  label,
+  input,
+  select,
+  textarea {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  button,
+  input,
+  select {
+    min-height: 2.75rem;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply border-slate-300 bg-white text-slate-950 shadow-sm dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    @apply text-slate-400 dark:text-slate-500;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    @apply outline-none ring-2 ring-teal-600 ring-offset-2 ring-offset-paper dark:ring-teal-400 dark:ring-offset-slate-950;
+  }
+
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+
+  th {
+    @apply font-medium;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900;
+  }
+
+  .interactive-muted {
+    @apply text-slate-700 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-200 dark:hover:bg-slate-800 dark:hover:text-white;
+  }
+
+  .theme-icon {
+    @apply relative inline-block h-4 w-4 shrink-0;
+  }
+
+  .theme-icon--sun {
+    @apply rounded-full border-2 border-current;
+    box-shadow:
+      0 -6px 0 -5px currentcolor,
+      0 6px 0 -5px currentcolor,
+      6px 0 0 -5px currentcolor,
+      -6px 0 0 -5px currentcolor;
+  }
+
+  .theme-icon--moon {
+    @apply rounded-full;
+    box-shadow: inset 5px -3px 0 0 currentcolor;
+  }
+
+  .custom-select-menu {
+    animation: custom-select-pop 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+
+@keyframes custom-select-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.safe-area-header {
+  padding-top: calc(0.75rem + env(safe-area-inset-top));
+  padding-right: calc(1rem + env(safe-area-inset-right));
+  padding-left: calc(1rem + env(safe-area-inset-left));
+}
+
+.safe-area-main {
+  padding-right: calc(1rem + env(safe-area-inset-right));
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  padding-left: calc(1rem + env(safe-area-inset-left));
+}
+
+.safe-area-screen {
+  padding-top: calc(1rem + env(safe-area-inset-top));
+  padding-right: calc(1rem + env(safe-area-inset-right));
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  padding-left: calc(1rem + env(safe-area-inset-left));
+}
+
+.safe-area-inline {
+  padding-right: calc(1rem + env(safe-area-inset-right));
+  padding-left: calc(1rem + env(safe-area-inset-left));
+}
+
+html.theme-transition body,
+html.theme-transition header,
+html.theme-transition .surface,
+html.theme-transition input,
+html.theme-transition select,
+html.theme-transition textarea,
+html.theme-transition button {
+  transition-property: color, background-color, border-color, box-shadow;
+  transition-duration: 220ms;
+  transition-timing-function: ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) body {
+    color: #f1f5f9;
+    background: #020617;
+  }
+}
+
+.dark .text-danger {
+  color: #fca5a5;
+}
+
+@media (any-pointer: coarse) {
+  input,
+  select,
+  textarea {
+    /* iOS zooms the viewport when a focused control renders below 16px. */
+    font-size: 1rem;
+  }
+}
+
+@media (display-mode: standalone) {
+  html,
+  body,
+  #root {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  body {
+    overscroll-behavior-y: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

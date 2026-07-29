@@ -1,0 +1,738 @@
+// Bullion Ledger — Phase 1 Prisma schema.
+// All weights stored in grams (PRD §7.2). Money/weights/rates use NUMERIC.
+// All timestamps UTC timestamptz.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CatalogSource {
+  SYSTEM
+  USER
+  MIGRATED
+}
+
+enum OrganizationAliasKind {
+  OFFICIAL
+  FORMER_NAME
+  TRADE_NAME
+  ACRONYM
+  LOCALIZED
+  SEARCH_ONLY
+}
+
+enum OrganizationRole {
+  BRAND
+  REFINER
+  MINT
+  MANUFACTURER
+  ISSUER
+  ASSAYER
+}
+
+enum AttributionStatus {
+  VERIFIED
+  DECLARED
+  USER_REPORTED
+  UNKNOWN
+}
+
+enum PurchaseIntakeStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+enum AttachmentMediaClass {
+  ASSET_PHOTO
+  DOCUMENT
+}
+
+enum AttachmentCaptureSource {
+  CAMERA
+  LIBRARY
+}
+
+enum AttachmentStatus {
+  READY
+  NEEDS_REVIEW
+  PROCESSING
+  FAILED
+}
+
+enum AttachmentProcessingMode {
+  NONE
+  OBJECT_CROP
+  DOCUMENT_SCAN
+}
+
+enum AttachmentVariantKind {
+  ORIGINAL
+  CROPPED
+  SCAN_COLOR
+  SCAN_GRAY
+  THUMBNAIL
+  PDF
+}
+
+/// One-time single-user system. PRD §4.1 — at most one row.
+model AppUser {
+  id                  String   @id @default(cuid())
+  username            String   @unique
+  passwordHash        String
+  /// Preferred unit for Dashboard weight displays.
+  dashboardWeightUnit String   @default("g")
+  /// Marks first-run initialization completion. PRD §4.2.
+  initializedAt       DateTime @default(now()) @db.Timestamptz(6)
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(6)
+
+  sessions            UserSession[]
+  passkeys            UserPasskey[]
+  webauthnChallenges  WebAuthnChallenge[]
+  audits              AuditLog[]
+  purchaseIntakes     PurchaseIntake[]
+  uploadedAttachments Attachment[]        @relation("AttachmentUploader")
+}
+
+/// HttpOnly cookie session backed by a hashed opaque token. PRD §5.4.
+model UserSession {
+  id                String    @id @default(cuid())
+  userId            String
+  tokenHash         String    @unique
+  /// Absolute session lifetime ceiling. PRD §5.4.
+  absoluteExpiresAt DateTime  @db.Timestamptz(6)
+  /// Idle (sliding) expiration. PRD §5.4.
+  idleExpiresAt     DateTime  @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
+  lastUsedAt        DateTime  @default(now()) @db.Timestamptz(6)
+  ip                String?
+  userAgent         String?
+  revokedAt         DateTime? @db.Timestamptz(6)
+  /// Last successful step-up verification on this session (PRD §4.3). A
+  /// sensitive change consumes it, so one passkey prompt authorizes exactly
+  /// one change and never leaves a standing elevation.
+  reauthenticatedAt DateTime? @db.Timestamptz(6)
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// WebAuthn/Passkey credential storage. PRD §5.3.
+model UserPasskey {
+  id           String    @id @default(cuid())
+  userId       String
+  /// WebAuthn credential ID (base64url).
+  credentialId String    @unique
+  /// COSE-encoded public key.
+  publicKey    Bytes
+  counter      Int       @default(0)
+  transports   String[]
+  name         String?
+  /// 'singleDevice' | 'multiDevice'. A synced (multi-device) passkey survives
+  /// losing one device, which changes the recovery advice we show the user.
+  deviceType   String?
+  backedUp     Boolean   @default(false)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  lastUsedAt   DateTime? @db.Timestamptz(6)
+
+  user AppUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Purpose of a pending WebAuthn ceremony.
+enum WebAuthnChallengePurpose {
+  REGISTRATION
+  AUTHENTICATION
+  REAUTH
+}
+
+/// Server-issued, single-use WebAuthn challenge. Storing it server-side is what
+/// makes the ceremony replay-resistant: `consumedAt` is set by a conditional
+/// update, so two concurrent verifies of one challenge cannot both win.
+model WebAuthnChallenge {
+  id         String                   @id @default(cuid())
+  purpose    WebAuthnChallengePurpose
+  /// Null for AUTHENTICATION, which is issued before the caller is known.
+  userId     String?
+  challenge  String                   @unique
+  expiresAt  DateTime                 @db.Timestamptz(6)
+  consumedAt DateTime?                @db.Timestamptz(6)
+  createdAt  DateTime                 @default(now()) @db.Timestamptz(6)
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId, purpose])
+}
+
+/// Metals catalog. Phase 1 seeds XAU, XAG (PRD §3.1); extension list PRD §3.2.
+model Metal {
+  id               String   @id @default(cuid())
+  code             String   @unique // XAU, XAG, XPT, XPD
+  name             String
+  displayPrecision Int      @default(2)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
+
+  products           ProductDefinition[]
+  purchaseItems      PurchaseItem[]
+  assets             Asset[]
+  spotPriceSnapshots SpotPriceSnapshot[]
+  purchaseSnapshots  PurchasePriceSnapshot[]
+
+  @@index([code])
+}
+
+/// A real organization which may appear in different product roles. Keeping
+/// identity separate from role avoids treating a bank, mint, and contract
+/// refiner as the same concept merely because a product carries one brand.
+model Organization {
+  id             String        @id @default(cuid())
+  seedKey        String?       @unique
+  canonicalName  String
+  normalizedName String        @unique
+  countryCode    String?       @db.Char(2)
+  source         CatalogSource @default(USER)
+  verified       Boolean       @default(false)
+  active         Boolean       @default(true)
+  createdAt      DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(6)
+
+  aliases               OrganizationAlias[]
+  capabilities          OrganizationCapability[]
+  products              ProductOrganization[]
+  purchaseItemSnapshots PurchaseItemOrganizationSnapshot[]
+
+  @@index([canonicalName])
+  @@index([active])
+}
+
+/// Searchable official, localized, abbreviated, and historical names.
+model OrganizationAlias {
+  id             String                @id @default(cuid())
+  seedKey        String?               @unique
+  organizationId String
+  name           String
+  normalizedName String
+  kind           OrganizationAliasKind
+  locale         String?
+  validFrom      DateTime?             @db.Date
+  validTo        DateTime?             @db.Date
+  createdAt      DateTime              @default(now()) @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, normalizedName, locale])
+  @@index([normalizedName])
+  @@index([organizationId, kind])
+}
+
+/// Roles an organization is known to be capable of. A product-specific role
+/// is still recorded separately because one organization can serve many roles.
+model OrganizationCapability {
+  organizationId String
+  capability     OrganizationRole
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, capability])
+  @@index([capability])
+}
+
+/// Product definition (model spec). PRD §6.1.
+model ProductDefinition {
+  id                     String        @id @default(cuid())
+  catalogKey             String?       @unique
+  source                 CatalogSource @default(USER)
+  metalId                String
+  name                   String
+  form                   String // bar, coin, minted, numismatic, jewelry, grain, other
+  brand                  String?
+  country                String?
+  yearOrVersion          String?
+  defaultPurity          Decimal       @db.Decimal(8, 7)
+  defaultUnitWeightGrams Decimal       @db.Decimal(18, 9)
+  defaultWeightUnit      String        @default("g") // g | kg | troy_oz | qian
+  active                 Boolean       @default(true)
+  /// Optimistic concurrency version. Incremented on every successful edit.
+  version                Int           @default(1)
+  createdAt              DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime      @updatedAt @db.Timestamptz(6)
+
+  metal         Metal                 @relation(fields: [metalId], references: [id])
+  purchaseItems PurchaseItem[]
+  assets        Asset[]
+  organizations ProductOrganization[]
+
+  @@index([metalId])
+  @@index([source, active])
+}
+
+/// An organization's role for one product definition. For example, a bank can
+/// be the visible BRAND while a different organization is the REFINER.
+model ProductOrganization {
+  id                  String            @id @default(cuid())
+  productDefinitionId String
+  organizationId      String
+  role                OrganizationRole
+  isPrimary           Boolean           @default(false)
+  attributionStatus   AttributionStatus @default(UNKNOWN)
+  validFrom           DateTime?         @db.Date
+  validTo             DateTime?         @db.Date
+  sourceUrl           String?
+  notes               String?
+  createdAt           DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime          @updatedAt @db.Timestamptz(6)
+
+  product      ProductDefinition @relation(fields: [productDefinitionId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([productDefinitionId, organizationId, role])
+  @@index([organizationId, role])
+  @@index([productDefinitionId, role, isPrimary])
+}
+
+/// Purchase transaction header. PRD §8.1 + §8.3 allocation method.
+model Purchase {
+  id                 String   @id @default(cuid())
+  idempotencyKeyHash String   @unique @db.Char(64)
+  requestHash        String   @db.Char(64)
+  purchasedAt        DateTime @db.Timestamptz(6)
+  dealerName         String?
+  branch             String?
+  orderNumber        String?
+  invoiceNumber      String?
+  currency           String // ISO 4217
+  paymentMethod      String?
+
+  /// Per-line metal subtotal sum (PRD §8.1 金屬商品小計).
+  subtotal         Decimal @db.Decimal(18, 4)
+  premium          Decimal @default(0) @db.Decimal(18, 4)
+  labor            Decimal @default(0) @db.Decimal(18, 4)
+  tax              Decimal @default(0) @db.Decimal(18, 4)
+  shipping         Decimal @default(0) @db.Decimal(18, 4)
+  otherFees        Decimal @default(0) @db.Decimal(18, 4)
+  discount         Decimal @default(0) @db.Decimal(18, 4)
+  /// Computed: subtotal + premium + labor + tax + shipping + otherFees - discount
+  totalAmount      Decimal @db.Decimal(18, 4)
+  allocationMethod String // MANUAL | SUBTOTAL_PROPORTIONAL | WEIGHT_PROPORTIONAL | EQUAL
+  /// SIMPLE | ITEMIZED. Records whether the buyer had a broken-down receipt, so
+  /// a zero in `premium`/`labor`/`tax` means "not charged" rather than
+  /// "not known separately". Purchase premium is derived from the spot snapshot
+  /// (PRD §10.3) either way.
+  priceEntryMode   String  @default("ITEMIZED")
+  notes            String?
+  /// Stable wizard source. A completed intake can create at most one purchase.
+  sourceIntakeId   String? @unique
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  items          PurchaseItem[]
+  assets         Asset[]
+  attachments    Attachment[]
+  priceSnapshots PurchasePriceSnapshot[]
+  sourceIntake   PurchaseIntake?         @relation(fields: [sourceIntakeId], references: [id], onDelete: SetNull)
+
+  @@index([purchasedAt])
+  @@index([currency])
+}
+
+/// Mobile-first, resumable purchase wizard draft. The client may provide the
+/// id once and keep using it across refreshes and devices.
+model PurchaseIntake {
+  id            String               @id
+  userId        String
+  status        PurchaseIntakeStatus @default(DRAFT)
+  currentStep   Int                  @default(0)
+  schemaVersion Int                  @default(1)
+  version       Int                  @default(1)
+  draftData     Json
+  completedAt   DateTime?            @db.Timestamptz(6)
+  cancelledAt   DateTime?            @db.Timestamptz(6)
+  createdAt     DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime             @updatedAt @db.Timestamptz(6)
+
+  user        AppUser      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purchase    Purchase?
+  attachments Attachment[]
+
+  @@index([userId, status, updatedAt])
+}
+
+/// Purchase line. PRD §8.2. Stores both inputs and allocated results.
+model PurchaseItem {
+  id                  String  @id @default(cuid())
+  purchaseId          String
+  productDefinitionId String?
+  metalId             String
+  form                String
+  brand               String?
+  name                String
+  country             String?
+  yearOrVersion       String?
+  serial              String?
+  quantity            Int     @default(1)
+
+  unitWeightGrams  Decimal @db.Decimal(18, 9)
+  /// Original input unit (kept for audit; grams is canonical).
+  weightUnit       String  @default("g")
+  purity           Decimal @db.Decimal(8, 7)
+  /// quantity × unitWeightGrams
+  grossWeightGrams Decimal @db.Decimal(18, 9)
+  /// grossWeightGrams × purity
+  fineWeightGrams  Decimal @db.Decimal(18, 9)
+
+  /// Per-line metal subtotal used as allocation basis.
+  lineSubtotal Decimal  @default(0) @db.Decimal(18, 4)
+  /// MANUAL override amount, null unless method == MANUAL.
+  manualAmount Decimal? @db.Decimal(18, 4)
+
+  /// Result of cost allocation across the purchase.
+  allocatedCost Decimal @default(0) @db.Decimal(18, 4)
+
+  packagingState         String?
+  hasCertificate         Boolean @default(false)
+  initialStorageLocation String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  purchase              Purchase                           @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product               ProductDefinition?                 @relation(fields: [productDefinitionId], references: [id])
+  metal                 Metal                              @relation(fields: [metalId], references: [id])
+  assets                Asset[]
+  organizationSnapshots PurchaseItemOrganizationSnapshot[]
+
+  @@index([purchaseId])
+  @@index([metalId])
+}
+
+/// Immutable organization-role names observed when a purchase is recorded.
+/// Catalog edits or future organization renames never rewrite ledger history.
+model PurchaseItemOrganizationSnapshot {
+  id                String            @id @default(cuid())
+  purchaseItemId    String
+  organizationId    String?
+  role              OrganizationRole
+  displayName       String
+  isPrimary         Boolean           @default(false)
+  attributionStatus AttributionStatus @default(UNKNOWN)
+  createdAt         DateTime          @default(now()) @db.Timestamptz(6)
+
+  purchaseItem PurchaseItem  @relation(fields: [purchaseItemId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseItemId, role])
+  @@index([organizationId])
+}
+
+/// Lifecycle events on a holding (PRD §6.4).
+enum AssetMovementType {
+  PURCHASE_IN
+  GIFT_IN
+  SALE
+  GIFT_OUT
+  LOST
+  DAMAGED
+  INVENTORY_ADJUSTMENT
+  STORAGE_TRANSFER
+  SENT_FOR_APPRAISAL
+  RETURNED_FROM_APPRAISAL
+}
+
+/// How a holding entered the ledger. Distinguishes a gift — whose cost basis is
+/// its market value at receipt, not a price anyone paid — from a real purchase,
+/// so return figures can be reported with or without gifted metal.
+enum AssetAcquisitionType {
+  PURCHASE
+  GIFT_RECEIVED
+  ADJUSTMENT
+}
+
+/// Physical asset generated from a purchase line. PRD §6.2.
+/// Phase 1: one Asset per PurchaseItem (lot of `quantity` items).
+model Asset {
+  id                  String  @id @default(cuid())
+  purchaseItemId      String?
+  purchaseId          String?
+  productDefinitionId String?
+  metalId             String
+
+  quantity         Int     @default(1)
+  grossWeightGrams Decimal @db.Decimal(18, 9)
+  purity           Decimal @db.Decimal(8, 7)
+  fineWeightGrams  Decimal @db.Decimal(18, 9)
+
+  allocatedCost Decimal @default(0) @db.Decimal(18, 4)
+  currency      String
+
+  status          String               @default("HELD") // HELD | SOLD | LOST | DAMAGED | GIFTED
+  acquisitionType AssetAcquisitionType @default(PURCHASE)
+  serial          String?
+  storageLocation String?
+
+  /// Optimistic concurrency version. Incremented on every successful edit.
+  version Int @default(1)
+
+  acquiredAt DateTime @default(now()) @db.Timestamptz(6)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  purchaseItem PurchaseItem?      @relation(fields: [purchaseItemId], references: [id], onDelete: SetNull)
+  purchase     Purchase?          @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  product      ProductDefinition? @relation(fields: [productDefinitionId], references: [id])
+  metal        Metal              @relation(fields: [metalId], references: [id])
+  attachments  Attachment[]
+  movements    AssetMovement[]
+
+  @@index([metalId])
+  @@index([purchaseId])
+  @@index([status])
+}
+
+/// Append-only lifecycle ledger for a holding (PRD §6.4, §15.3).
+///
+/// Movements are the truth; `Asset` carries the maintained remaining balance so
+/// existing holdings queries stay simple. Both are written in one transaction,
+/// so the balance can never drift from the events that produced it.
+model AssetMovement {
+  id         String            @id @default(cuid())
+  assetId    String
+  type       AssetMovementType
+  occurredAt DateTime          @db.Timestamptz(6)
+
+  /// Amount leaving or entering. Zero for movements that only relocate metal.
+  quantity         Int     @default(0)
+  fineWeightGrams  Decimal @default(0) @db.Decimal(18, 9)
+  grossWeightGrams Decimal @default(0) @db.Decimal(18, 9)
+
+  /// Buyer, gift recipient, or the person the metal was received from.
+  counterparty String?
+
+  /// Sale economics. Null for every non-sale movement.
+  proceedsAmount Decimal? @db.Decimal(18, 4)
+  fees           Decimal? @db.Decimal(18, 4)
+  netProceeds    Decimal? @db.Decimal(18, 4)
+  currency       String?
+
+  /// Cost carried out of the holding by this movement.
+  costBasis   Decimal? @db.Decimal(18, 4)
+  /// Null for gifts: giving metal away is not a realized loss, and booking one
+  /// would make the P&L card read as though money had been lost.
+  realizedPnl Decimal? @db.Decimal(18, 4)
+
+  /// Market conditions when the movement happened, so a gift's value at the
+  /// time stays reconstructable after prices move.
+  spotPricePerGram Decimal? @db.Decimal(18, 6)
+  marketValue      Decimal? @db.Decimal(18, 4)
+  marketCurrency   String?
+
+  fromStorageLocation String?
+  toStorageLocation   String?
+
+  notes     String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([occurredAt])
+}
+
+/// Attachment metadata; blobs live in private MinIO. PRD §14.
+model Attachment {
+  id                 String                   @id @default(cuid())
+  intakeId           String?
+  purchaseId         String?
+  assetId            String?
+  uploadedById       String?
+  draftItemId        String?
+  kind               String // front, back, certificate, invoice, ...
+  mediaClass         AttachmentMediaClass     @default(ASSET_PHOTO)
+  captureSource      AttachmentCaptureSource  @default(LIBRARY)
+  status             AttachmentStatus         @default(READY)
+  processingMode     AttachmentProcessingMode @default(NONE)
+  description        String?
+  tags               String[]                 @default([])
+  filename           String
+  mime               String
+  verifiedMime       String?
+  sizeBytes          Int
+  sha256             String?                  @db.Char(64)
+  width              Int?
+  height             Int?
+  pageCount          Int?
+  processingMetadata Json?
+  userConfirmed      Boolean                  @default(false)
+  uploadKeyHash      String?                  @unique @db.Char(64)
+  uploadRequestHash  String?                  @db.Char(64)
+  version            Int                      @default(1)
+  storageKey         String                   @unique // Compatibility pointer to ORIGINAL.
+  isCover            Boolean                  @default(false)
+  isSensitive        Boolean                  @default(false)
+  deletedAt          DateTime?                @db.Timestamptz(6)
+  createdAt          DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime                 @updatedAt @db.Timestamptz(6)
+
+  intake     PurchaseIntake?     @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  purchase   Purchase?           @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  asset      Asset?              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  uploadedBy AppUser?            @relation("AttachmentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  variants   AttachmentVariant[]
+
+  @@index([intakeId, deletedAt])
+  @@index([purchaseId])
+  @@index([assetId])
+  @@index([uploadedById])
+  @@index([sha256])
+}
+
+/// Immutable stored representations. Revisions let users redo a crop or scan
+/// without replacing the original evidence file.
+model AttachmentVariant {
+  id                String                @id @default(cuid())
+  attachmentId      String
+  kind              AttachmentVariantKind
+  revision          Int                   @default(1)
+  storageKey        String                @unique
+  mime              String
+  sizeBytes         Int
+  sha256            String                @db.Char(64)
+  width             Int?
+  height            Int?
+  pageCount         Int?
+  transformMetadata Json?
+  createdAt         DateTime              @default(now()) @db.Timestamptz(6)
+
+  attachment Attachment @relation(fields: [attachmentId], references: [id], onDelete: Cascade)
+
+  @@unique([attachmentId, kind, revision])
+  @@index([attachmentId, kind])
+}
+
+/// Spot/FX market snapshot. PRD §6.5, §9, §12.
+model SpotPriceSnapshot {
+  id                     String   @id @default(cuid())
+  metalId                String
+  timestamp              DateTime @db.Timestamptz(6)
+  price                  Decimal  @db.Decimal(18, 6)
+  quoteCurrency          String
+  quoteUnit              String // g | kg | troy_oz | qian
+  normalizedPricePerGram Decimal  @db.Decimal(18, 6)
+  sourceType             String // SPOT | BENCHMARK | DEALER_SELL | DEALER_BUYBACK | MANUAL
+  provider               String?
+  retrievalTime          DateTime @default(now()) @db.Timestamptz(6)
+  raw                    Json?
+
+  metal Metal @relation(fields: [metalId], references: [id], onDelete: Cascade)
+
+  @@unique([metalId, timestamp, sourceType, quoteCurrency, quoteUnit])
+  @@index([metalId, timestamp])
+}
+
+/// Health and last-outcome of each configured price provider (PRD §12.1
+/// `getStatus`, §26.3). One row per provider id; updated on every attempt so
+/// the UI can distinguish "never ran" from "failing since".
+model PriceProviderStatus {
+  provider        String    @id
+  kind            String // SPOT | FX
+  lastSuccessAt   DateTime? @db.Timestamptz(6)
+  lastFailureAt   DateTime? @db.Timestamptz(6)
+  lastError       String?
+  consecutiveFail Int       @default(0)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(6)
+}
+
+/// Market conditions captured when a purchase is recorded (PRD §9).
+///
+/// This is deliberately a copy, not a join to a live snapshot: the premium the
+/// user paid is a historical fact, and it must stay reconstructable even after
+/// price rows are pruned or a provider is swapped out.
+model PurchasePriceSnapshot {
+  id            String   @id @default(cuid())
+  purchaseId    String
+  metalId       String
+  /// Raw provider quote exactly as received.
+  quotePrice    Decimal  @db.Decimal(18, 6)
+  quoteCurrency String
+  quoteUnit     String // g | kg | troy_oz | qian
+  quotedAt      DateTime @db.Timestamptz(6)
+  provider      String
+  sourceType    String // SPOT | BENCHMARK | ... | MANUAL (PRD §12.2)
+
+  /// FX applied to reach the purchase currency; null when already matching.
+  fxRate          Decimal? @db.Decimal(18, 8)
+  fxBaseCurrency  String?
+  fxQuoteCurrency String?
+
+  /// Derived, in the purchase's own currency.
+  pricePerGram   Decimal @db.Decimal(18, 6)
+  pricePerQian   Decimal @db.Decimal(18, 6)
+  /// Fine weight × pricePerGram at purchase time (PRD §9, §10.3 basis).
+  intrinsicValue Decimal @db.Decimal(18, 4)
+  /// Purchase total − intrinsic value, and that over intrinsic value.
+  premiumAmount  Decimal @db.Decimal(18, 4)
+  premiumRate    Decimal @db.Decimal(12, 8)
+
+  /// Auditable provider payload; never contains credentials.
+  raw       Json?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  metal    Metal    @relation(fields: [metalId], references: [id], onDelete: Restrict)
+
+  @@unique([purchaseId, metalId])
+  @@index([metalId, quotedAt])
+}
+
+model FxRateSnapshot {
+  id            String   @id @default(cuid())
+  baseCurrency  String
+  quoteCurrency String
+  rate          Decimal  @db.Decimal(18, 8)
+  timestamp     DateTime @db.Timestamptz(6)
+  source        String   @default("manual")
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([baseCurrency, quoteCurrency, timestamp, source])
+  @@index([baseCurrency, quoteCurrency, timestamp])
+}
+
+/// Append-only audit log. PRD §25. Never stores secrets.
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  action        String
+  resourceType  String
+  resourceId    String?
+  beforeSummary Json?
+  afterSummary  Json?
+  ip            String?
+  userAgent     String?
+  sessionId     String?
+  result        String   @default("success") // success | failure
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+/// Key/value store for system state (init flag, settings, feature flags).
+model SystemSetting {
+  key       String   @id
+  value     String
+  encrypted Boolean  @default(false)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+}

@@ -1,0 +1,7 @@
+**/dist/
+**/build/
+**/node_modules/
+**/coverage/
+**/.docker-data/
+pnpm-lock.yaml
+*.md
