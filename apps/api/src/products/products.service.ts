@@ -168,8 +168,11 @@ export class ProductsService {
 
       const effectiveUnitWeight = data.defaultUnitWeightGrams
         ? new Decimal(data.defaultUnitWeightGrams as string)
-        : before.defaultUnitWeightGrams;
-      const effectivePurity = purity ?? before.defaultPurity;
+        : new Decimal(before.defaultUnitWeightGrams.toString());
+      // Prisma returns its own Decimal implementation. Convert it at this
+      // boundary before calling shared helpers, which intentionally accept
+      // decimal.js values (and otherwise reject Prisma Decimal objects).
+      const effectivePurity = purity ?? new Decimal(before.defaultPurity.toString());
       void quantizeWeightGrams(
         fineWeightGrams(effectiveUnitWeight, effectivePurity),
         'defaultFineWeightGrams',
