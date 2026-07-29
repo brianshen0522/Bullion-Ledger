@@ -1,5 +1,6 @@
 import { WEIGHT_UNITS, WEIGHT_UNIT_LABELS } from '@bullion-ledger/shared';
 import Decimal from 'decimal.js';
+import { useState } from 'react';
 
 import { computeLinePreview } from '../screens/purchase-preview.js';
 import { convertUnitWeightInput } from '../screens/purchase-form.js';
@@ -32,6 +33,7 @@ import {
   WizardSelect,
   WizardTextarea,
 } from './fields.js';
+import { DealerCombobox } from './dealer-combobox.js';
 import type {
   OrganizationSearchProvider,
   PurchaseWizardDraft,
@@ -64,6 +66,10 @@ interface TransactionStepProps {
 
 export function TransactionStep({ value, issues, onChange }: TransactionStepProps) {
   const patch = (next: Partial<WizardTransaction>) => onChange({ ...value, ...next });
+  const [dealerBranches, setDealerBranches] = useState<string[]>([]);
+  const branchHint = dealerBranches.length > 0
+    ? `已有分店：${dealerBranches.join('、')}`
+    : undefined;
   return (
     <section aria-labelledby="wizard-transaction-heading" className="space-y-4">
       <div>
@@ -96,15 +102,16 @@ export function TransactionStep({ value, issues, onChange }: TransactionStepProp
           placeholder="請選擇幣別"
           searchPlaceholder="搜尋代碼、中文、英文或別名"
         />
-        <WizardField
-          label="購買商家"
-          path="transaction.dealerName"
+        <DealerCombobox
           value={value.dealerName}
           onChange={(dealerName) => patch({ dealerName })}
-          issues={issues}
-          maxLength={128}
-          autoComplete="organization"
-          placeholder="例如：銀樓、銀行、交易平台"
+          onBranches={(branches) => {
+            setDealerBranches(branches);
+            if (branches.length === 1 && !value.branch) {
+              patch({ branch: branches[0]! });
+            }
+          }}
+          error={issueForPath(issues, 'transaction.dealerName')?.message}
         />
         <WizardField
           label="分店或通路"
@@ -113,6 +120,7 @@ export function TransactionStep({ value, issues, onChange }: TransactionStepProp
           onChange={(branch) => patch({ branch })}
           issues={issues}
           maxLength={128}
+          hint={branchHint}
         />
         <WizardField
           label="訂單編號"

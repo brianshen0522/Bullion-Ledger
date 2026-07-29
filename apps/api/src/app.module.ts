@@ -20,6 +20,7 @@ import { PriceProvidersModule } from './price-providers/price-providers.module.j
 import { MarketPricesModule } from './market-prices/market-prices.module.js';
 import { MovementsModule } from './movements/movements.module.js';
 import { BackupModule } from './backup/backup.module.js';
+import { DealersModule } from './dealers/dealers.module.js';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { BackupModule } from './backup/backup.module.js';
     PriceProvidersModule,
     MarketPricesModule,
     MovementsModule,
+    DealersModule,
     DashboardModule,
     WebAuthnModule,
     StorageModule,
