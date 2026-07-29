@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { api, type AssetAttachment, type HeldAssetListItem } from '../api.js';
 import { createWizardMedia } from '../purchase-wizard/media-utils.js';
@@ -119,6 +119,29 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
   const [documents, setDocuments] = useState<EditDocument[]>([]);
   const [newDocs, setNewDocs] = useState<EditDocument[]>([]);
   const deletedDocIds = useRef(new Set<string>());
+
+  const assetAttachments = useQuery({
+    queryKey: ['asset-attachments', asset.id],
+    queryFn: () => api.get<AssetAttachment[]>(`/assets/${encodeURIComponent(asset.id)}/attachments`),
+  });
+  useEffect(() => {
+    if (!assetAttachments.data) return;
+    const docs = assetAttachments.data
+      .filter((a) => a.mediaClass === 'DOCUMENT' && a.status !== 'FAILED')
+      .map((a) => ({
+        id: a.id,
+        serverId: a.id,
+        serverVersion: a.version,
+        documentType: a.kind,
+        description: a.description ?? '',
+        filename: a.filename,
+        mime: a.mime,
+        sizeBytes: a.sizeBytes,
+        source: a.captureSource,
+        needsReselection: false,
+      }));
+    setDocuments(docs);
+  }, [assetAttachments.data]);
 
   const stepIndex = EDIT_STEPS.findIndex((s) => s.id === step);
   const queryClient = useQueryClient();
@@ -336,9 +359,13 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
   }
 
   function deleteDoc(id: string) {
-    const doc = documents.find((d) => d.id === id);
-    if (doc?.serverId) deletedDocIds.current.add(doc.serverId);
-    setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, deleted: true } : d)));
+    const existing = documents.find((d) => d.id === id);
+    if (existing?.serverId) {
+      deletedDocIds.current.add(existing.serverId);
+      setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, deleted: true } : d)));
+    } else {
+      setNewDocs((prev) => prev.filter((d) => d.id !== id));
+    }
   }
 
   return (
@@ -839,7 +866,7 @@ function NewPhotoCard({
 }
 
 function DocStep({
-  documents, newDocs, onAdd, onDelete, onPatch: _onPatch, onPatchNew,
+  documents, newDocs, onAdd, onDelete, onPatch, onPatchNew,
 }: {
   documents: EditDocument[];
   newDocs: EditDocument[];
@@ -893,6 +920,20 @@ function DocStep({
         <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600">尚無文件</p>
       )}
       <ol className="space-y-4">
+        {documents.filter((d) => !d.deleted).map((doc) => (
+          <li key={doc.id} className="surface min-w-0 space-y-3 rounded-xl p-3">
+            <p className="text-sm font-medium">{doc.filename}</p>
+            <select className="rounded-lg border px-2 py-1.5 text-sm" value={doc.documentType} onChange={(e) => onPatch(doc.id, { documentType: e.target.value })}>
+              <option value="invoice">發票</option>
+              <option value="receipt">收據</option>
+              <option value="certificate">證書</option>
+              <option value="warranty_card">保卡</option>
+            </select>
+            <button type="button" onClick={() => onDelete(doc.id)} className="rounded-lg px-3 text-sm font-medium text-danger">
+              移除
+            </button>
+          </li>
+        ))}
         {newDocs.filter((d) => !d.deleted).map((doc) => (
           <li key={doc.id} className="surface min-w-0 space-y-3 rounded-xl p-3">
             <p className="text-sm font-medium">{doc.filename}</p>
