@@ -8,6 +8,8 @@ import { formatGrams, formatMoney } from '../units.js';
 import { formatWeightInput } from '@bullion-ledger/shared';
 import Decimal from 'decimal.js';
 
+type UploadedVariant = { kind: string; revision: number; attachmentVersion: number };
+
 type EditStepId = 'transaction' | 'details' | 'costs' | 'photos' | 'documents' | 'review';
 
 interface EditStepDef {
@@ -212,11 +214,12 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
 
         if (photo.crop && photo.mime.startsWith('image/')) {
           const cropped = await renderCroppedPhoto(photo.originalFile, photo.crop);
-          await api.upload(
+          const variant = await api.upload<UploadedVariant>(
             `/attachments/${encodeURIComponent(attachment.id)}/variants/upload?kind=CROPPED`,
             cropped,
             { 'Content-Type': cropped.type },
           );
+          attachment.version = variant.attachmentVersion;
         }
 
         await api.patch(`/attachments/${encodeURIComponent(attachment.id)}/review`, {
@@ -278,11 +281,12 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
 
         if (doc.corners && doc.mime.startsWith('image/')) {
           const scan = await renderDocumentScan(doc.originalFile, doc.corners);
-          await api.upload(
+          const variant = await api.upload<UploadedVariant>(
             `/attachments/${encodeURIComponent(attachment.id)}/variants/upload?kind=SCAN_COLOR`,
             scan,
             { 'Content-Type': scan.type },
           );
+          attachment.version = variant.attachmentVersion;
         }
 
         await api.patch(`/attachments/${encodeURIComponent(attachment.id)}/review`, {
@@ -485,9 +489,9 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
               <DocStep
                 documents={documents}
                 newDocs={newDocs}
-                onAdd={(files) => {
+                onAdd={(files, source) => {
                   for (const file of files) {
-                    const media = createWizardMedia(file, 'DOCUMENT', 'LIBRARY');
+                    const media = createWizardMedia(file, 'DOCUMENT', source);
                     setNewDocs((prev) => [
                       ...prev,
                       {
@@ -497,7 +501,7 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
                         filename: media.filename,
                         mime: media.mime,
                         sizeBytes: media.sizeBytes,
-                        source: 'LIBRARY',
+                        source,
                         originalFile: file,
                         previewUrl: media.previewUrl,
                         corners: media.documentCorners,
@@ -839,33 +843,52 @@ function DocStep({
 }: {
   documents: EditDocument[];
   newDocs: EditDocument[];
-  onAdd: (files: File[]) => void;
+  onAdd: (files: File[], source: 'LIBRARY' | 'CAMERA') => void;
   onDelete: (id: string) => void;
   onPatch: (id: string, next: Partial<EditDocument>) => void;
   onPatchNew: (id: string, next: Partial<EditDocument>) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
   const allDocs = [...documents.filter((d) => !d.deleted), ...newDocs.filter((d) => !d.deleted)];
+  const MIME_TYPES = '.jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf';
 
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">文件</h2>
       <p className="text-sm text-slate-600 dark:text-slate-300">上傳發票、收據或證書等文件。</p>
       <input
-        ref={inputRef}
+        ref={fileRef}
         className="sr-only"
         type="file"
-        accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
+        accept={MIME_TYPES}
         multiple
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []);
           event.currentTarget.value = '';
-          onAdd(files);
+          onAdd(files, 'LIBRARY');
         }}
       />
-      <button type="button" className="rounded-xl bg-accent px-4 py-3 font-medium text-white" onClick={() => inputRef.current?.click()}>
-        新增文件
-      </button>
+      <input
+        ref={cameraRef}
+        className="sr-only"
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        capture="environment"
+        onChange={(event) => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = '';
+          onAdd(files, 'CAMERA');
+        }}
+      />
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="rounded-xl bg-accent px-4 py-3 font-medium text-white" onClick={() => fileRef.current?.click()}>
+          選擇檔案
+        </button>
+        <button type="button" className="rounded-xl border px-4 py-3 font-medium" onClick={() => cameraRef.current?.click()}>
+          拍照
+        </button>
+      </div>
       {allDocs.length === 0 && (
         <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600">尚無文件</p>
       )}
