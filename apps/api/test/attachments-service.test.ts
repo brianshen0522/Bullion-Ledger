@@ -430,14 +430,16 @@ describe('AttachmentsService', () => {
     expect(storage.deleteObject).toHaveBeenCalledOnce();
   });
 
-  it('does not append derivatives after an attachment leaves its draft intake', async () => {
+  it('does not append derivatives to an attachment that belongs to nothing mutable', async () => {
+    // Draft, holding and purchase are the three scopes an owner can still act
+    // on; anything else (a soft-deleted or detached row) stays frozen.
     const { service, prisma, storage } = harness();
     prisma.attachment.findUnique.mockResolvedValueOnce({
-      id: 'attachment-finalized',
+      id: 'attachment-detached',
       version: 4,
       uploadedById: 'user-1',
       intakeId: null,
-      purchaseId: 'purchase-1',
+      purchaseId: null,
       assetId: null,
       intake: null,
       deletedAt: null,
@@ -447,7 +449,7 @@ describe('AttachmentsService', () => {
     await expect(
       service.uploadVariant(
         'user-1',
-        'attachment-finalized',
+        'attachment-detached',
         AttachmentVariantKind.CROPPED,
         'image/png',
         png(4, 5),
@@ -641,20 +643,185 @@ describe('AttachmentsService', () => {
     expect(storage.deleteObject).not.toHaveBeenCalled();
   });
 
-  it('does not soft-delete an attachment after purchase finalization', async () => {
+  it('does not soft-delete an attachment that belongs to nothing mutable', async () => {
     const { service, prisma } = harness();
     prisma.attachment.findUnique.mockResolvedValueOnce({
-      id: 'attachment-finalized',
+      id: 'attachment-orphaned',
       uploadedById: 'user-1',
       intakeId: null,
-      purchaseId: 'purchase-1',
+      purchaseId: null,
       assetId: null,
       intake: null,
       deletedAt: null,
       variants: [],
     });
 
-    await expect(service.softDelete('user-1', 'attachment-finalized')).rejects.toThrow(/immutable/);
+    await expect(service.softDelete('user-1', 'attachment-orphaned')).rejects.toThrow(/immutable/);
+  });
+
+  it('lets the owner remove a purchase-level document after finalization', async () => {
+    // The holding editor lists invoices and receipts, so removing one there has
+    // to work; before this, every such delete answered 409.
+    const record = {
+      id: 'attachment-invoice',
+      uploadedById: 'user-1',
+      intakeId: null,
+      purchaseId: 'purchase-1',
+      assetId: null,
+      intake: null,
+      deletedAt: null,
+      mediaClass: AttachmentMediaClass.DOCUMENT,
+      version: 1,
+      variants: [],
+    };
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      attachment: {
+        updateMany,
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ ...record, deletedAt: new Date('2026-09-14T00:00:00Z') }),
+      },
+    };
+    const prisma = {
+      attachment: { findUnique: vi.fn().mockResolvedValue(record) },
+      $transaction: vi.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
+    };
+    const service = new AttachmentsService(
+      prisma as never,
+      {} as never,
+      { recordInTransaction: vi.fn().mockResolvedValue(undefined) } as never,
+      { get: vi.fn() } as never,
+    );
+
+    await expect(service.softDelete('user-1', 'attachment-invoice')).resolves.toMatchObject({
+      id: 'attachment-invoice',
+    });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'attachment-invoice', purchaseId: 'purchase-1', deletedAt: null },
+      }),
+    );
+  });
+});
+
+describe('AttachmentsService listForAsset', () => {
+  function assetHarness(asset: { id: string; status: string; purchaseId: string | null } | null) {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      asset: { findUnique: vi.fn().mockResolvedValue(asset) },
+      attachment: { findMany },
+    };
+    return {
+      service: new AttachmentsService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        { get: vi.fn() } as never,
+      ),
+      findMany,
+    };
+  }
+
+  it('lists the purchase-level documents alongside the holding own photos', async () => {
+    // Finalization moves photos onto the asset but leaves invoices/receipts on
+    // the purchase, so an assetId-only query hid every document ever uploaded
+    // through the purchase wizard.
+    const { service, findMany } = assetHarness({
+      id: 'asset-1',
+      status: 'HELD',
+      purchaseId: 'purchase-1',
+    });
+
+    await service.listForAsset('user-1', 'asset-1');
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          deletedAt: null,
+          OR: [{ assetId: 'asset-1' }, { purchaseId: 'purchase-1' }],
+        },
+      }),
+    );
+  });
+
+  it('queries only the holding when it has no purchase', async () => {
+    const { service, findMany } = assetHarness({
+      id: 'asset-1',
+      status: 'HELD',
+      purchaseId: null,
+    });
+
+    await service.listForAsset('user-1', 'asset-1');
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { deletedAt: null, OR: [{ assetId: 'asset-1' }] },
+      }),
+    );
+  });
+
+  it('reports an unknown holding rather than listing nothing', async () => {
+    const { service } = assetHarness(null);
+    await expect(service.listForAsset('user-1', 'missing')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+});
+
+describe('AttachmentsService issueReadUrl disposition', () => {
+  function readHarness() {
+    const issueReadUrl = vi.fn().mockResolvedValue({ url: 'signed', expiresInSeconds: 300 });
+    const prisma = {
+      attachment: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'attachment-1',
+          filename: 'invoice.pdf',
+          mediaClass: AttachmentMediaClass.DOCUMENT,
+          deletedAt: null,
+          uploadedById: 'user-1',
+          intake: null,
+          variants: [],
+        }),
+      },
+      attachmentVariant: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            kind: AttachmentVariantKind.ORIGINAL,
+            revision: 1,
+            storageKey: 'private/invoice.pdf',
+            mime: 'application/pdf',
+          },
+        ]),
+      },
+    };
+    return {
+      service: new AttachmentsService(
+        prisma as never,
+        { issueReadUrl } as never,
+        {} as never,
+        { get: vi.fn() } as never,
+      ),
+      issueReadUrl,
+    };
+  }
+
+  it('still defaults a document to a download', async () => {
+    const { service, issueReadUrl } = readHarness();
+    await service.issueReadUrl('user-1', 'attachment-1');
+    expect(issueReadUrl).toHaveBeenCalledWith(
+      'private/invoice.pdf',
+      expect.objectContaining({ download: true }),
+    );
+  });
+
+  it('serves a document inline when the caller is previewing it', async () => {
+    const { service, issueReadUrl } = readHarness();
+    await service.issueReadUrl('user-1', 'attachment-1', undefined, undefined, 'inline');
+    expect(issueReadUrl).toHaveBeenCalledWith(
+      'private/invoice.pdf',
+      expect.objectContaining({ download: false }),
+    );
   });
 });
 

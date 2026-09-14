@@ -67,9 +67,8 @@ interface TransactionStepProps {
 export function TransactionStep({ value, issues, onChange }: TransactionStepProps) {
   const patch = (next: Partial<WizardTransaction>) => onChange({ ...value, ...next });
   const [dealerBranches, setDealerBranches] = useState<string[]>([]);
-  const branchHint = dealerBranches.length > 0
-    ? `已有分店：${dealerBranches.join('、')}`
-    : undefined;
+  const branchHint =
+    dealerBranches.length > 0 ? `已有分店：${dealerBranches.join('、')}` : undefined;
   return (
     <section aria-labelledby="wizard-transaction-heading" className="space-y-4">
       <div>

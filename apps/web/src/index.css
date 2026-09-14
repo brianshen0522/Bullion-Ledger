@@ -8,6 +8,17 @@
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-text-size-adjust: 100%;
+    /* Height of the phone tab bar, excluding the home-indicator inset the bar
+       adds itself. Zero on tablet and desktop, where navigation is in the
+       header. Page padding and sticky action bars both read this, so the bar
+       can never cover content or a primary button. */
+    --app-bottom-nav: 0px;
+  }
+
+  @media (max-width: 639.98px) {
+    :root {
+      --app-bottom-nav: 3.5rem;
+    }
   }
 
   html.dark {
@@ -141,8 +152,19 @@
 
 .safe-area-main {
   padding-right: calc(1rem + env(safe-area-inset-right));
-  padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  padding-bottom: calc(1rem + var(--app-bottom-nav) + env(safe-area-inset-bottom));
   padding-left: calc(1rem + env(safe-area-inset-left));
+}
+
+/*
+ * A wizard's Back / Next bar. It sticks above the phone tab bar rather than
+ * under it, and the tab bar already clears the home indicator on phones.
+ */
+.sticky-action-bar {
+  position: sticky;
+  bottom: calc(var(--app-bottom-nav) + env(safe-area-inset-bottom));
+  z-index: 20;
+  padding-bottom: 0.75rem;
 }
 
 .safe-area-screen {

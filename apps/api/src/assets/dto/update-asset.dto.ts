@@ -53,10 +53,19 @@ export class UpdateAssetDto {
   @MaxLength(128)
   storageLocation?: string | null;
 
+  /**
+   * Descriptive overrides for this one holding. A supplied empty string or null
+   * clears the override and restores the inherited catalog / purchase value.
+   */
   @IsOptional()
   @IsString()
   @MaxLength(128)
   name?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  form?: string | null;
 
   @IsOptional()
   @IsString()

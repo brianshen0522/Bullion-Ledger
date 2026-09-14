@@ -480,6 +480,16 @@ model Asset {
   serial          String?
   storageLocation String?
 
+  /// Per-lot descriptive overrides. Null means "inherit": a catalog-linked lot
+  /// reads ProductDefinition, an unlinked one reads its PurchaseItem snapshot.
+  /// Editing one holding must not rewrite the catalog or the purchase record,
+  /// so a divergent value is stored here and clearing it restores inheritance.
+  nameOverride          String?
+  formOverride          String?
+  brandOverride         String?
+  countryOverride       String?
+  yearOrVersionOverride String?
+
   /// Optimistic concurrency version. Incremented on every successful edit.
   version Int @default(1)
 

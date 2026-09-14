@@ -211,6 +211,7 @@ change. Compose runs shared-package watchers in both application containers.
 | GET | `/api/purchases` | List purchases |
 | GET | `/api/purchases/:id` | Get purchase with items/assets |
 | POST | `/api/purchases` | Create purchase atomically; requires `Idempotency-Key` |
+| PATCH | `/api/purchases/:id` | Correct transaction metadata (dealer, branch, order/invoice number, payment method, notes) |
 | POST | `/api/purchase-intakes` | Create/resume a user-owned wizard draft |
 | GET | `/api/purchase-intakes` | List the current user's wizard drafts |
 | GET | `/api/purchase-intakes/:id` | Read a wizard draft and active attachments |
@@ -223,6 +224,9 @@ change. Compose runs shared-package watchers in both application containers.
 | GET | `/api/attachments/:id/url` | Issue an authorized short-lived variant URL |
 | DELETE | `/api/attachments/:id` | Soft-delete attachment metadata |
 | GET | `/api/assets` | List held assets |
+| PATCH | `/api/assets/:id` | Version-checked holding edit; descriptive fields become per-lot overrides |
+| GET | `/api/assets/:assetId/attachments` | Photos on the holding plus the documents its purchase carries |
+| POST | `/api/assets/:assetId/attachments/upload` | Same-origin bounded raw binary upload onto a holding |
 | GET | `/api/dashboard/summary` | Dashboard summary (cost, holdings by metal) |
 | PATCH | `/api/dashboard/preferences` | Save the current user's Dashboard weight unit |
 
@@ -389,9 +393,12 @@ quotas (20 revisions and 100 MiB by default). The API serializes quota checks on
 the owning database row before writing a derivative to private object storage;
 if the metadata transaction fails after that write, it removes the orphaned
 object. Intake-wide retained-byte checks are likewise serialized on the draft
-intake. Once an attachment leaves a draft intake through finalization or
-cancellation, variant, review, and delete mutations are rejected; immutable
-reads remain available to the owner.
+intake. An attachment stays mutable while it belongs to something its owner
+still holds — a draft intake, a holding, or a purchase — so an invoice can be
+re-typed, re-captioned, re-scanned or removed long after finalization. The
+ORIGINAL variant is never replaced either way; only metadata and new revisions
+move. An attachment that belongs to none of the three (detached or already
+soft-deleted) is frozen, and immutable reads remain available to the owner.
 
 The browser performs an initial foreground crop or document-corner detection
 on-device, then lets the user adjust touch-friendly control points. Confirmed
@@ -400,6 +407,29 @@ normalized JPEG derivatives and uploaded as revisioned `CROPPED` or
 `SCAN_COLOR` variants. The immutable original is always retained. HEIC/HEIF is
 accepted only when the current browser can decode it into a derivative; otherwise
 the picker asks for JPEG, PNG, or WebP before anything is uploaded.
+
+### Holding edits and per-lot overrides
+
+A holding's descriptive fields (name, form, brand, country, year/version)
+resolve in three steps: this lot's own override, then the linked
+`ProductDefinition` so catalog corrections reach inventory, then the
+`PurchaseItem` snapshot taken at buy time. Editing one holding writes an
+override on the `Asset` row — it does not rewrite the catalog (which would move
+every other lot of the same product) or the purchase snapshot (which is a
+historical record). Submitting the inherited value back, or clearing the field,
+drops the override and restores inheritance.
+
+Transaction metadata is shared by the whole purchase and is edited through
+`PATCH /api/purchases/:id`. `purchasedAt`, the currency, the amounts and the
+allocation method are deliberately not editable there: they are inputs to the
+committed allocation and to the purchase-time spot snapshot (PRD §9), so
+changing one in place would silently invalidate stored premium and melt figures.
+
+Documents uploaded through the purchase wizard stay on the `Purchase` and are
+shared by every lot from it, while photos are reassigned to their holding.
+`GET /api/assets/:assetId/attachments` returns both, tagged by `purchaseId` /
+`assetId`, so the holding editor can show an invoice and say that removing it
+affects the other lots too.
 
 ### Organization catalog
 
@@ -411,6 +441,21 @@ custom products can keep linked or user-reported organization snapshots,
 including the selected primary organization for each role. Custom organization
 creation serializes its cross-table alias uniqueness check to prevent concurrent
 duplicate aliases.
+
+### Phone navigation
+
+Seven destinations in a two-column header grid put four rows of buttons above
+every screen's own content on a phone. Navigation now lives in a five-column bar
+in the thumb zone: four destinations plus an overflow sheet holding the rest,
+with the overflow button labelled with the current screen when the active
+destination is inside it. The header keeps only the app name and the account
+controls, and the desktop bar is unchanged.
+
+`--app-bottom-nav` (0 above the `sm` breakpoint, 3.5rem below it) is the single
+source for the bar's height. Page padding and the wizards' sticky action bars
+both read it, so the bar can never cover page content or sit on top of a Next
+button. Wide tables (異動紀錄, 市場歷史交易) render as cards below `lg` instead of
+scrolling sideways, and the wizard step strips wrap to two rows of three.
 
 ### Responsive theme
 

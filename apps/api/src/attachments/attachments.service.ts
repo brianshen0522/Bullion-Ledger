@@ -456,7 +456,11 @@ export class AttachmentsService {
       const attachment = await this.prisma.$transaction(async (tx) => {
         if (isCover && input.metadata.mediaClass === AttachmentMediaClass.ASSET_PHOTO) {
           await tx.attachment.updateMany({
-            where: { assetId: input.assetId, mediaClass: AttachmentMediaClass.ASSET_PHOTO, isCover: true },
+            where: {
+              assetId: input.assetId,
+              mediaClass: AttachmentMediaClass.ASSET_PHOTO,
+              isCover: true,
+            },
             data: { isCover: false },
           });
         }
@@ -765,9 +769,18 @@ export class AttachmentsService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await lockForMutation(tx, scope);
-      if (dto.isCover === true && scope.kind === 'asset' && mediaClass === AttachmentMediaClass.ASSET_PHOTO) {
+      if (
+        dto.isCover === true &&
+        scope.kind === 'asset' &&
+        mediaClass === AttachmentMediaClass.ASSET_PHOTO
+      ) {
         await tx.attachment.updateMany({
-          where: { assetId: scope.assetId, mediaClass: AttachmentMediaClass.ASSET_PHOTO, isCover: true, id: { not: id } },
+          where: {
+            assetId: scope.assetId,
+            mediaClass: AttachmentMediaClass.ASSET_PHOTO,
+            isCover: true,
+            id: { not: id },
+          },
           data: { isCover: false },
         });
       }
@@ -858,22 +871,36 @@ export class AttachmentsService {
   async listForAsset(userId: string, assetId: string) {
     const asset = await this.prisma.asset.findUnique({
       where: { id: assetId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, purchaseId: true },
     });
     if (!asset) throw new NotFoundException('Asset not found');
+    // Photos are reassigned to the holding at finalization, but the invoice,
+    // receipt and certificate that prove the buy stay on the Purchase and are
+    // shared by every lot from it. Listing only assetId rows made those
+    // documents invisible in the holding editor, so return both scopes and let
+    // the caller tell them apart by the purchaseId / assetId already presented.
     const attachments = await this.prisma.attachment.findMany({
-      where: { assetId, deletedAt: null },
+      where: {
+        deletedAt: null,
+        OR: [{ assetId }, ...(asset.purchaseId ? [{ purchaseId: asset.purchaseId }] : [])],
+      },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       include: ATTACHMENT_INCLUDE,
     });
     return attachments.map(presentAttachment);
   }
 
+  /**
+   * @param disposition 'attachment' makes the browser save the file, which is
+   *   the right default for a document. 'inline' is what an in-app preview
+   *   needs — without it a PDF or scan can only be downloaded, never shown.
+   */
   async issueReadUrl(
     userId: string,
     id: string,
     kind: AttachmentVariantKind = AttachmentVariantKind.ORIGINAL,
     revision?: number,
+    disposition?: 'inline' | 'attachment',
   ) {
     const attachment = await this.requireAuthorized(userId, id, true);
     const variants = await this.prisma.attachmentVariant.findMany({
@@ -889,7 +916,10 @@ export class AttachmentsService {
           ? attachment.filename
           : derivativeFilename(attachment.filename, variant.mime),
       mime: variant.mime,
-      download: attachment.mediaClass === AttachmentMediaClass.DOCUMENT,
+      download:
+        disposition === undefined
+          ? attachment.mediaClass === AttachmentMediaClass.DOCUMENT
+          : disposition === 'attachment',
     });
     return {
       ...signed,
@@ -971,7 +1001,8 @@ export class AttachmentsService {
 
 type MutableScope =
   | { kind: 'intake'; intakeId: string; userId: string }
-  | { kind: 'asset'; assetId: string };
+  | { kind: 'asset'; assetId: string }
+  | { kind: 'purchase'; purchaseId: string };
 
 function resolveMutableScope(
   attachment: {
@@ -996,24 +1027,28 @@ function resolveMutableScope(
   if (attachment.assetId && !attachment.deletedAt) {
     return { kind: 'asset', assetId: attachment.assetId };
   }
+  // An invoice or receipt stays on the Purchase after finalization. Owning it
+  // has to mean being able to correct its type, its caption, or remove a file
+  // added by mistake — the same latitude an asset photo already has. The
+  // ORIGINAL variant remains immutable either way; only metadata moves.
+  if (attachment.purchaseId && !attachment.deletedAt) {
+    return { kind: 'purchase', purchaseId: attachment.purchaseId };
+  }
   throw immutableAttachmentConflict();
 }
 
-async function lockForMutation(
-  tx: Prisma.TransactionClient,
-  scope: MutableScope,
-): Promise<void> {
+async function lockForMutation(tx: Prisma.TransactionClient, scope: MutableScope): Promise<void> {
   if (scope.kind === 'intake') {
     await lockDraftIntake(tx, scope.intakeId, scope.userId);
   }
 }
 
-function attachmentMutationWhere(
-  id: string,
-  scope: MutableScope,
-): Prisma.AttachmentWhereInput {
+function attachmentMutationWhere(id: string, scope: MutableScope): Prisma.AttachmentWhereInput {
   if (scope.kind === 'intake') {
     return draftAttachmentMutationWhere(id, scope.userId, scope.intakeId);
+  }
+  if (scope.kind === 'purchase') {
+    return { id, purchaseId: scope.purchaseId, deletedAt: null };
   }
   return { id, assetId: scope.assetId, deletedAt: null };
 }

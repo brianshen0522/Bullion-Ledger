@@ -9,7 +9,7 @@ import type { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.module.js';
 import { AuditService, type AuditContext } from '../audit/audit.service.js';
-import { HELD_ASSET_INCLUDE, presentHeldAsset } from './asset-presenter.js';
+import { HELD_ASSET_INCLUDE, OVERRIDABLE_FIELDS, presentHeldAsset } from './asset-presenter.js';
 import { UpdateAssetDto } from './dto/update-asset.dto.js';
 import {
   assertMoney,
@@ -52,6 +52,7 @@ export class AssetsService {
       dto.serial === undefined &&
       dto.storageLocation === undefined &&
       dto.name === undefined &&
+      dto.form === undefined &&
       dto.brand === undefined &&
       dto.country === undefined &&
       dto.yearOrVersion === undefined &&
@@ -157,13 +158,24 @@ export class AssetsService {
       if (dto.storageLocation !== undefined)
         data.storageLocation = nullableString(dto.storageLocation);
 
-      // Descriptive fields on the PurchaseItem snapshot (for non-catalog assets).
+      // Descriptive fields are per-lot overrides on the Asset row. They are not
+      // written back to ProductDefinition (that would rewrite every other lot of
+      // the same product) nor to PurchaseItem (that is the purchase-time
+      // snapshot). Submitting a value equal to the inherited one clears the
+      // override, so "edit it back" and "restore" end in the same state.
+      const inherited = inheritedDescription(before);
+      for (const field of OVERRIDABLE_FIELDS) {
+        const supplied = dto[field];
+        if (supplied === undefined) continue;
+        const value = nullableString(supplied);
+        data[`${field}Override`] = value === inherited[field] ? null : value;
+      }
+
+      // packagingState / hasCertificate have no catalog source; the PurchaseItem
+      // snapshot is where this lot records them.
       const itemData: Record<string, unknown> = {};
-      if (dto.name !== undefined) itemData.name = nullableString(dto.name) ?? '未命名資產';
-      if (dto.brand !== undefined) itemData.brand = nullableString(dto.brand);
-      if (dto.country !== undefined) itemData.country = nullableString(dto.country);
-      if (dto.yearOrVersion !== undefined) itemData.yearOrVersion = nullableString(dto.yearOrVersion);
-      if (dto.packagingState !== undefined) itemData.packagingState = nullableString(dto.packagingState);
+      if (dto.packagingState !== undefined)
+        itemData.packagingState = nullableString(dto.packagingState);
       if (dto.hasCertificate !== undefined) itemData.hasCertificate = dto.hasCertificate;
 
       // Reject semantic no-op — every computed data value must differ from the
@@ -172,7 +184,9 @@ export class AssetsService {
       const itemChanged =
         before.purchaseItemId !== null &&
         Object.keys(itemData).length > 0 &&
-        Object.keys(itemData).some((key) => itemFieldDiffers(key, itemData[key], before.purchaseItem));
+        Object.keys(itemData).some((key) =>
+          itemFieldDiffers(key, itemData[key], before.purchaseItem),
+        );
       if (!assetChanged && !itemChanged) {
         throw new BadRequestException('No changes provided');
       }
@@ -228,7 +242,27 @@ function summarizeAsset(asset: HeldAssetRecord | null) {
     serial: asset.serial,
     storageLocation: asset.storageLocation,
     status: asset.status,
+    nameOverride: asset.nameOverride,
+    formOverride: asset.formOverride,
+    brandOverride: asset.brandOverride,
+    countryOverride: asset.countryOverride,
+    yearOrVersionOverride: asset.yearOrVersionOverride,
     version: asset.version,
+  };
+}
+
+/**
+ * What each descriptive field reads with no override: the linked catalog
+ * definition when there is one, otherwise the purchase-time snapshot.
+ */
+function inheritedDescription(asset: HeldAssetRecord): Record<string, string | null> {
+  const source = asset.productDefinitionId && asset.product ? asset.product : asset.purchaseItem;
+  return {
+    name: source?.name ?? null,
+    form: source?.form ?? null,
+    brand: source?.brand ?? null,
+    country: source?.country ?? null,
+    yearOrVersion: source?.yearOrVersion ?? null,
   };
 }
 

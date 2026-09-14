@@ -7,7 +7,10 @@ export interface DealerOption {
 }
 
 export function DealerCombobox({
-  value, onChange, onBranches, error,
+  value,
+  onChange,
+  onBranches,
+  error,
 }: {
   value: string;
   onChange: (name: string) => void;
@@ -33,9 +36,7 @@ export function DealerCombobox({
     placeholderData: (prev) => prev ?? [],
   });
 
-  const filtered = query
-    ? options
-    : options.slice(0, 20);
+  const filtered = query ? options : options.slice(0, 20);
   const isNew = query && !options.some((o) => o.name.toLowerCase() === query.toLowerCase());
 
   function choose(option: DealerOption) {
@@ -64,7 +65,9 @@ export function DealerCombobox({
           aria-autocomplete="list"
           aria-expanded={open}
           aria-controls={listboxId}
-          aria-activedescendant={open && filtered[activeIndex] ? `${id}-option-${activeIndex}` : undefined}
+          aria-activedescendant={
+            open && filtered[activeIndex] ? `${id}-option-${activeIndex}` : undefined
+          }
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           data-wizard-path="transaction.dealerName"
@@ -73,8 +76,16 @@ export function DealerCombobox({
           placeholder="例如：銀樓、銀行、交易平台"
           autoComplete="off"
           maxLength={128}
-          onFocus={() => { setOpen(true); setQuery(''); }}
-          onClick={() => { if (!open) { setOpen(true); setQuery(''); } }}
+          onFocus={() => {
+            setOpen(true);
+            setQuery('');
+          }}
+          onClick={() => {
+            if (!open) {
+              setOpen(true);
+              setQuery('');
+            }
+          }}
           onChange={(event) => {
             setQuery(event.target.value);
             setOpen(true);
@@ -92,14 +103,28 @@ export function DealerCombobox({
             }
             if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
               event.preventDefault();
-              if (!open) { setOpen(true); return; }
+              if (!open) {
+                setOpen(true);
+                return;
+              }
               setActiveIndex((c) =>
-                Math.min(Math.max(c + (event.key === 'ArrowDown' ? 1 : -1), 0), Math.max(filtered.length + (isNew ? 1 : 0) - 1, 0)),
+                Math.min(
+                  Math.max(c + (event.key === 'ArrowDown' ? 1 : -1), 0),
+                  Math.max(filtered.length + (isNew ? 1 : 0) - 1, 0),
+                ),
               );
               return;
             }
-            if (event.key === 'Home' && open) { event.preventDefault(); setActiveIndex(0); return; }
-            if (event.key === 'End' && open) { event.preventDefault(); setActiveIndex(Math.max(filtered.length + (isNew ? 1 : 0) - 1, 0)); return; }
+            if (event.key === 'Home' && open) {
+              event.preventDefault();
+              setActiveIndex(0);
+              return;
+            }
+            if (event.key === 'End' && open) {
+              event.preventDefault();
+              setActiveIndex(Math.max(filtered.length + (isNew ? 1 : 0) - 1, 0));
+              return;
+            }
             if (event.key === 'Enter' && open) {
               if (isNew && activeIndex >= filtered.length) {
                 chooseCustom(query);
@@ -110,7 +135,11 @@ export function DealerCombobox({
           }}
         />
       </label>
-      {error ? <p id={errorId} className="mt-1 text-xs text-danger">{error}</p> : null}
+      {error ? (
+        <p id={errorId} className="mt-1 text-xs text-danger">
+          {error}
+        </p>
+      ) : null}
       {open && (
         <div className="surface absolute z-40 mt-1 max-h-72 w-full overflow-y-auto rounded-lg p-1 shadow-lg">
           <ul id={listboxId} role="listbox" aria-label="購買商家選項">
@@ -157,7 +186,9 @@ export function DealerCombobox({
                   onClick={() => chooseCustom(query)}
                 >
                   <span className="block font-medium">新增「{query}」</span>
-                  <span className="block text-xs text-slate-500 dark:text-slate-400">輸入新的商家名稱</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    輸入新的商家名稱
+                  </span>
                 </button>
               </li>
             )}

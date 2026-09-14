@@ -26,6 +26,7 @@ import Decimal from 'decimal.js';
 import { formatWeightInput, fromGrams, type WeightUnit } from '@bullion-ledger/shared';
 import { computePurchase, type PurchaseInput } from './purchase-domain.js';
 import { PurchaseDto } from './dto/purchase.dto.js';
+import { UPDATABLE_PURCHASE_FIELDS, UpdatePurchaseDto } from './dto/update-purchase.dto.js';
 import { summarizeHeldAssets } from './purchase-summary.js';
 import {
   hashIdempotencyKey,
@@ -115,6 +116,57 @@ export class PurchasesService {
     });
     if (!purchase) throw new NotFoundException('Purchase not found');
     return this.toPublicPurchase(purchase);
+  }
+
+  /**
+   * Correct the transaction metadata of a committed purchase. Only the fields
+   * in UpdatePurchaseDto are writable — nothing here feeds the allocation or
+   * the purchase-time price snapshot, so no ledger figure is recomputed.
+   */
+  async update(id: string, dto: UpdatePurchaseDto, auditContext: AuditContext = {}) {
+    const data: Record<string, string | null> = {};
+    for (const field of UPDATABLE_PURCHASE_FIELDS) {
+      const supplied = dto[field];
+      if (supplied === undefined) continue;
+      data[field] = typeof supplied === 'string' && supplied.trim() ? supplied.trim() : null;
+    }
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('No changes provided');
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const before = await tx.purchase.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          dealerName: true,
+          branch: true,
+          orderNumber: true,
+          invoiceNumber: true,
+          paymentMethod: true,
+          notes: true,
+        },
+      });
+      if (!before) throw new NotFoundException('Purchase not found');
+      if (
+        Object.entries(data).every(([key, value]) => before[key as keyof typeof before] === value)
+      ) {
+        throw new BadRequestException('No changes provided');
+      }
+
+      await tx.purchase.update({ where: { id }, data });
+      await this.audit.recordInTransaction(tx, {
+        ...auditContext,
+        action: 'purchase.update',
+        resourceType: 'Purchase',
+        resourceId: id,
+        beforeSummary: before,
+        afterSummary: { ...before, ...data },
+      });
+      return id;
+    });
+
+    return this.get(updated);
   }
 
   async create(

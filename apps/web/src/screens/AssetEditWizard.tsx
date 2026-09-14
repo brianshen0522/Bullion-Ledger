@@ -1,24 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { api, type AssetAttachment, type HeldAssetListItem } from '../api.js';
+import { CustomSelect } from '../CustomSelect.js';
 import { createWizardMedia } from '../purchase-wizard/media-utils.js';
 import { renderCroppedPhoto, renderDocumentScan } from '../purchase-wizard/index.js';
+import { productFormLabel, productFormOptions } from '../product-forms.js';
 import { formatGrams, formatMoney } from '../units.js';
-import { formatWeightInput } from '@bullion-ledger/shared';
-import Decimal from 'decimal.js';
+import { WEIGHT_UNITS, WEIGHT_UNIT_LONG_LABELS, type WeightUnit } from '@bullion-ledger/shared';
+import {
+  OVERRIDABLE_FIELDS,
+  attachmentReadPath,
+  attachmentReviewPatches,
+  assetPatchHasChanges,
+  buildAssetPatch,
+  buildPurchasePatch,
+  documentPreview,
+  initialAssetForm,
+  initialPurchaseForm,
+  isPurchaseScoped,
+  previewVariant,
+  unitWeightInUnit,
+  type AssetEditForm,
+  type AttachmentEdit,
+  type OverridableField,
+  type PurchaseEditForm,
+} from './asset-edit-model.js';
 
 type UploadedVariant = { kind: string; revision: number; attachmentVersion: number };
 
 type EditStepId = 'transaction' | 'details' | 'costs' | 'photos' | 'documents' | 'review';
 
-interface EditStepDef {
-  id: EditStepId;
-  label: string;
-  shortLabel: string;
-}
-
-const EDIT_STEPS: EditStepDef[] = [
+const EDIT_STEPS: { id: EditStepId; label: string; shortLabel: string }[] = [
   { id: 'transaction', label: '交易資訊', shortLabel: '交易' },
   { id: 'details', label: '商品資訊', shortLabel: '商品' },
   { id: 'costs', label: '成本', shortLabel: '成本' },
@@ -27,10 +40,47 @@ const EDIT_STEPS: EditStepDef[] = [
   { id: 'review', label: '確認儲存', shortLabel: '確認' },
 ];
 
-interface EditPhoto {
+const PHOTO_KINDS: ReadonlyArray<readonly [string, string]> = [
+  ['front', '正面'],
+  ['back', '背面'],
+  ['side', '側面／幣邊'],
+  ['serial', '序號'],
+  ['security', '防偽標誌'],
+  ['packaging', '包裝'],
+  ['other', '其他'],
+];
+
+const DOCUMENT_KINDS: ReadonlyArray<readonly [string, string]> = [
+  ['invoice', '發票'],
+  ['receipt', '收據'],
+  ['certificate', '證書'],
+  ['warranty_card', '保卡'],
+  ['other', '其他'],
+];
+
+type Corners = {
+  topLeft: { x: number; y: number };
+  topRight: { x: number; y: number };
+  bottomRight: { x: number; y: number };
+  bottomLeft: { x: number; y: number };
+};
+
+interface ExistingPhoto extends AttachmentEdit {
+  filename: string;
+  mime: string;
+  variant: { kind: string; revision: number } | null;
+}
+
+interface ExistingDocument extends AttachmentEdit {
+  filename: string;
+  mime: string;
+  sizeBytes: number;
+  purchaseScoped: boolean;
+  variant: { kind: string; revision: number } | null;
+}
+
+interface NewMedia {
   id: string;
-  serverId?: string;
-  serverVersion?: number;
   kind: string;
   isCover: boolean;
   description: string;
@@ -38,34 +88,12 @@ interface EditPhoto {
   mime: string;
   sizeBytes: number;
   source: 'CAMERA' | 'LIBRARY';
-  originalFile?: File;
+  originalFile: File;
   previewUrl?: string;
   crop?: { x: number; y: number; width: number; height: number };
+  corners?: Corners;
   width?: number;
   height?: number;
-  needsReselection?: boolean;
-  deleted?: boolean;
-  variantKind?: string;
-  variantRevision?: number;
-}
-
-interface EditDocument {
-  id: string;
-  serverId?: string;
-  serverVersion?: number;
-  documentType: string;
-  description: string;
-  filename: string;
-  mime: string;
-  sizeBytes: number;
-  source: 'CAMERA' | 'LIBRARY';
-  originalFile?: File;
-  previewUrl?: string;
-  corners?: { topLeft: { x: number; y: number }; topRight: { x: number; y: number }; bottomRight: { x: number; y: number }; bottomLeft: { x: number; y: number } };
-  width?: number;
-  height?: number;
-  needsReselection?: boolean;
-  deleted?: boolean;
 }
 
 interface AssetEditWizardProps {
@@ -75,321 +103,183 @@ interface AssetEditWizardProps {
 }
 
 export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProps) {
-  const [step, setStep] = useState<EditStepId>('transaction');
+  const [step, setStep] = useState<EditStepId>('details');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
-  // Basic info form
-  const [name, setName] = useState(asset.name ?? '');
-  const [serial, setSerial] = useState(asset.serial ?? '');
-  const [storageLocation, setStorageLocation] = useState(asset.storageLocation ?? '');
-  const [brand, setBrand] = useState(asset.brand ?? '');
-  const [country, setCountry] = useState(asset.country ?? '');
-  const [yearOrVersion, setYearOrVersion] = useState(asset.yearOrVersion ?? '');
-  const [packagingState, setPackagingState] = useState(asset.packagingState ?? '');
-  const [hasCertificate, setHasCertificate] = useState(asset.hasCertificate);
-  const [quantity, setQuantity] = useState(String(asset.quantity));
-  const [unitWeight, setUnitWeight] = useState(formatWeightInput(asset.unitWeightGrams));
-  const [purity, setPurity] = useState(asset.purity);
-  const [allocatedCost, setAllocatedCost] = useState(asset.allocatedCost);
-
-  // Photos
-  const originalCoverId = useRef(
-    asset.photos?.find((p) => p.isCover)?.id ?? asset.photos?.[0]?.id ?? null,
+  const [form, setForm] = useState<AssetEditForm>(() => initialAssetForm(asset));
+  const [purchaseForm, setPurchaseForm] = useState<PurchaseEditForm>(() =>
+    initialPurchaseForm(asset),
   );
-  const [photos, setPhotos] = useState<EditPhoto[]>(() =>
-    (asset.photos ?? []).map((p, i) => ({
-      id: p.id,
-      serverId: p.id,
-      kind: p.kind,
-      isCover: p.isCover || (i === 0 && !asset.photos?.some((x) => x.isCover)),
-      description: p.description ?? '',
-      filename: p.filename,
-      mime: p.mime,
-      sizeBytes: 0,
-      source: 'LIBRARY' as const,
-      variantKind: p.variant?.variant,
-      variantRevision: p.variant?.revision,
-    })),
-  );
-  const [newPhotoMedia, setNewPhotoMedia] = useState<EditPhoto[]>([]);
-  const deletedPhotoIds = useRef(new Set<string>());
+  const patchField = <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
 
-  // Documents
-  const [documents, setDocuments] = useState<EditDocument[]>([]);
-  const [newDocs, setNewDocs] = useState<EditDocument[]>([]);
-  const deletedDocIds = useRef(new Set<string>());
-
-  const assetAttachments = useQuery({
+  const attachments = useQuery({
     queryKey: ['asset-attachments', asset.id],
-    queryFn: () => api.get<AssetAttachment[]>(`/assets/${encodeURIComponent(asset.id)}/attachments`),
+    queryFn: () =>
+      api.get<AssetAttachment[]>(`/assets/${encodeURIComponent(asset.id)}/attachments`),
   });
-  useEffect(() => {
-    if (!assetAttachments.data) return;
-    const docs = assetAttachments.data
-      .filter((a) => a.mediaClass === 'DOCUMENT' && a.status !== 'FAILED')
-      .map((a) => ({
-        id: a.id,
-        serverId: a.id,
-        serverVersion: a.version,
-        documentType: a.kind,
-        description: a.description ?? '',
-        filename: a.filename,
-        mime: a.mime,
-        sizeBytes: a.sizeBytes,
-        source: a.captureSource,
-        needsReselection: false,
-      }));
-    setDocuments(docs);
-  }, [assetAttachments.data]);
+
+  // The listing is the only source with attachment versions, so it seeds both
+  // the editable copies and the baseline a save diffs against.
+  const serverPhotos = useMemo(() => toExistingPhotos(attachments.data), [attachments.data]);
+  const serverDocuments = useMemo(() => toExistingDocuments(attachments.data), [attachments.data]);
+
+  const [photos, setPhotos] = useState<ExistingPhoto[]>([]);
+  const [documents, setDocuments] = useState<ExistingDocument[]>([]);
+  const [newPhotos, setNewPhotos] = useState<NewMedia[]>([]);
+  const [newDocs, setNewDocs] = useState<NewMedia[]>([]);
+  const deletedIds = useRef(new Set<string>());
+
+  useEffect(() => setPhotos(serverPhotos), [serverPhotos]);
+  useEffect(() => setDocuments(serverDocuments), [serverDocuments]);
+
+  // Object URLs for local previews outlive a single render; release them when
+  // the editor closes so a long editing session does not leak every picked
+  // file. The ref keeps the unmount cleanup reading the final list without
+  // re-registering (and therefore revoking early) on every pick.
+  const pendingPreviews = useRef<string[]>([]);
+  pendingPreviews.current = [...newPhotos, ...newDocs]
+    .map((media) => media.previewUrl)
+    .filter((url): url is string => Boolean(url));
+  useEffect(
+    () => () => {
+      for (const url of pendingPreviews.current) URL.revokeObjectURL(url);
+    },
+    [],
+  );
 
   const stepIndex = EDIT_STEPS.findIndex((s) => s.id === step);
-  const queryClient = useQueryClient();
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // The editor opens inline, inside the inventory list. Without this the page
+  // stays where it was and a keyboard or screen-reader user has no idea an
+  // editor appeared below them.
+  useEffect(() => {
+    const formElement = formRef.current;
+    if (!formElement) return;
+    formElement.scrollIntoView({ block: 'start', behavior: 'auto' });
+    formElement.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus();
+  }, []);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const patch: Record<string, unknown> = { version: asset.version };
+      const result = buildAssetPatch(asset, form);
+      if ('error' in result) throw new Error(result.error);
+      const patch = result.patch;
+      const purchasePatch = buildPurchasePatch(asset, purchaseForm);
 
-      const qty = parseInt(quantity, 10);
-      if (qty !== asset.quantity) patch.quantity = qty;
-
-      const nw = formatWeightInput(unitWeight);
-      if (nw !== formatWeightInput(asset.unitWeightGrams)) {
-        patch.unitWeight = nw;
-        patch.weightUnit = 'g';
-      }
-
-      const cp = new Decimal(purity).toFixed();
-      if (cp !== asset.purity) patch.purity = cp;
-
-      const nc = new Decimal(allocatedCost.trim()).toFixed();
-      if (nc !== asset.allocatedCost) patch.allocatedCost = nc;
-
-      if (serial.trim() !== (asset.serial ?? '')) patch.serial = serial.trim() || null;
-      if (storageLocation.trim() !== (asset.storageLocation ?? ''))
-        patch.storageLocation = storageLocation.trim() || null;
-      if (name.trim() !== (asset.name ?? '')) patch.name = name.trim() || null;
-      if (brand.trim() !== (asset.brand ?? '')) patch.brand = brand.trim() || null;
-      if (country.trim() !== (asset.country ?? '')) patch.country = country.trim() || null;
-      if (yearOrVersion.trim() !== (asset.yearOrVersion ?? ''))
-        patch.yearOrVersion = yearOrVersion.trim() || null;
-      if (packagingState.trim() !== (asset.packagingState ?? ''))
-        patch.packagingState = packagingState.trim() || null;
-      if (hasCertificate !== asset.hasCertificate) patch.hasCertificate = hasCertificate;
-
-      // Delete removed photos
-      for (const id of deletedPhotoIds.current) {
+      for (const id of deletedIds.current) {
         await api.delete(`/attachments/${encodeURIComponent(id)}`);
       }
 
-      // Delete removed documents (purchase-level)
-      for (const id of deletedDocIds.current) {
-        await api.delete(`/attachments/${encodeURIComponent(id)}`);
+      // Promote the new cover first: the server demotes the previous one in the
+      // same transaction, so no explicit isCover:false call is needed.
+      for (const review of attachmentReviewPatches(
+        [...serverPhotos, ...serverDocuments],
+        [...photos, ...documents],
+      )) {
+        await api.patch(`/attachments/${encodeURIComponent(review.id)}/review`, review.body);
       }
 
-      // Set cover photo (skip if unchanged to avoid version mismatch)
-      const activePhotos = photos.filter((p) => !p.deleted);
-      const coverPhoto = activePhotos.find((p) => p.isCover);
-      const newCoverId = coverPhoto?.serverId ?? null;
-      if (newCoverId !== originalCoverId.current) {
-        const fetchVersion = async (id: string) => {
-          const att = await api.get<AssetAttachment>(`/attachments/${encodeURIComponent(id)}`);
-          return att.version;
-        };
-        if (coverPhoto?.serverId) {
-          const version = await fetchVersion(coverPhoto.serverId);
-          await api.patch(`/attachments/${encodeURIComponent(coverPhoto.serverId)}/review`, {
-            version, isCover: true,
-          });
-        }
-        for (const p of activePhotos) {
-          if (p.serverId && p.serverId !== coverPhoto?.serverId && p.isCover !== false) {
-            const version = await fetchVersion(p.serverId);
-            await api.patch(`/attachments/${encodeURIComponent(p.serverId)}/review`, {
-              version, isCover: false,
-            });
-          }
-        }
+      for (const photo of newPhotos) {
+        await uploadAssetMedia(asset.id, photo, 'ASSET_PHOTO');
       }
-
-      // Upload new photos
-      for (const photo of newPhotoMedia) {
-        if (!photo.originalFile || photo.deleted) continue;
-        const params = new URLSearchParams({
-          clientMediaId: photo.id,
-          kind: photo.kind || 'asset',
-          mediaClass: 'ASSET_PHOTO',
-          captureSource: photo.source,
-          processingMode: 'OBJECT_CROP',
-        });
-        if (photo.description?.trim()) params.set('description', photo.description.trim());
-        if (photo.isCover) params.set('isCover', 'true');
-
-        const attachment = await api.upload<AssetAttachment>(
-          `/assets/${encodeURIComponent(asset.id)}/attachments/upload?${params.toString()}`,
-          photo.originalFile,
-          {
-            'Content-Type': photo.mime,
-            'X-Filename': encodeUploadFilename(photo.filename),
-            'Idempotency-Key': `${asset.id}-${photo.id}-upload`,
-          },
-        );
-
-        if (photo.crop && photo.mime.startsWith('image/')) {
-          const cropped = await renderCroppedPhoto(photo.originalFile, photo.crop);
-          const variant = await api.upload<UploadedVariant>(
-            `/attachments/${encodeURIComponent(attachment.id)}/variants/upload?kind=CROPPED`,
-            cropped,
-            { 'Content-Type': cropped.type },
-          );
-          attachment.version = variant.attachmentVersion;
-        }
-
-        await api.patch(`/attachments/${encodeURIComponent(attachment.id)}/review`, {
-          version: attachment.version,
-          kind: photo.kind || 'asset',
-          mediaClass: 'ASSET_PHOTO',
-          processingMode: 'OBJECT_CROP',
-          processingMetadata: {
-            clientMediaId: photo.id,
-            originalFilename: photo.filename,
-            sourceWidth: photo.width,
-            sourceHeight: photo.height,
-            crop: photo.crop,
-            transformVersion: 1,
-          },
-          userConfirmed: true,
-          description: photo.description?.trim() || null,
-          isCover: photo.isCover,
-        });
-      }
-
-      // Upload new documents
       for (const doc of newDocs) {
-        if (!doc.originalFile || doc.deleted) continue;
-        const params = new URLSearchParams({
-          clientMediaId: doc.id,
-          kind: doc.documentType || 'document',
-          mediaClass: 'DOCUMENT',
-          captureSource: doc.source,
-          processingMode: doc.mime === 'application/pdf' ? 'NONE' : 'DOCUMENT_SCAN',
-        });
-        if (doc.description?.trim()) params.set('description', doc.description.trim());
-
-        const attachment = await api.upload<AssetAttachment>(
-          `/assets/${encodeURIComponent(asset.id)}/attachments/upload?${params.toString()}`,
-          doc.originalFile,
-          {
-            'Content-Type': doc.mime,
-            'X-Filename': encodeUploadFilename(doc.filename),
-            'Idempotency-Key': `${asset.id}-${doc.id}-upload`,
-          },
-        );
-
-        const processingMetadata: Record<string, unknown> = {
-          clientMediaId: doc.id,
-          originalFilename: doc.filename,
-          sourceWidth: doc.width,
-          sourceHeight: doc.height,
-          transformVersion: 1,
-        };
-        if (doc.corners) {
-          processingMetadata.corners = [
-            doc.corners.topLeft,
-            doc.corners.topRight,
-            doc.corners.bottomRight,
-            doc.corners.bottomLeft,
-          ];
-        }
-
-        if (doc.corners && doc.mime.startsWith('image/')) {
-          const scan = await renderDocumentScan(doc.originalFile, doc.corners);
-          const variant = await api.upload<UploadedVariant>(
-            `/attachments/${encodeURIComponent(attachment.id)}/variants/upload?kind=SCAN_COLOR`,
-            scan,
-            { 'Content-Type': scan.type },
-          );
-          attachment.version = variant.attachmentVersion;
-        }
-
-        await api.patch(`/attachments/${encodeURIComponent(attachment.id)}/review`, {
-          version: attachment.version,
-          kind: doc.documentType || 'document',
-          mediaClass: 'DOCUMENT',
-          processingMode: doc.mime === 'application/pdf' ? 'NONE' : 'DOCUMENT_SCAN',
-          processingMetadata,
-          userConfirmed: true,
-          description: doc.description?.trim() || null,
-        });
+        await uploadAssetMedia(asset.id, doc, 'DOCUMENT');
       }
 
-      // Save metadata if changed
-      if (Object.keys(patch).length > 1) {
+      if (assetPatchHasChanges(patch)) {
         await api.patch(`/assets/${encodeURIComponent(asset.id)}`, patch);
+      }
+      if (asset.purchase && Object.keys(purchasePatch).length > 0) {
+        await api.patch(`/purchases/${encodeURIComponent(asset.purchase.id)}`, purchasePatch);
       }
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['assets'] });
+      void queryClient.invalidateQueries({ queryKey: ['asset-attachments', asset.id] });
       void queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
+      void queryClient.invalidateQueries({ queryKey: ['purchases'] });
       onDone();
     },
     onError: (error: Error) => {
+      setSaving(false);
       setSaveError(error.message);
     },
   });
 
-  function goNext() {
-    const next = EDIT_STEPS[stepIndex + 1];
-    if (next) setStep(next.id);
+  function addFiles(files: File[], target: 'photo' | 'document', source: 'CAMERA' | 'LIBRARY') {
+    const setter = target === 'photo' ? setNewPhotos : setNewDocs;
+    const noCoverYet =
+      target === 'photo' && photos.every((p) => !p.isCover) && newPhotos.every((p) => !p.isCover);
+    setter((prev) => [
+      ...prev,
+      ...files.map((file, index) => {
+        const media = createWizardMedia(
+          file,
+          target === 'photo' ? 'ASSET_PHOTO' : 'DOCUMENT',
+          source,
+        );
+        return {
+          id: media.id,
+          kind: target === 'photo' ? 'front' : 'invoice',
+          isCover: noCoverYet && prev.length === 0 && index === 0,
+          description: '',
+          filename: media.filename,
+          mime: media.mime,
+          sizeBytes: media.sizeBytes,
+          source,
+          originalFile: file,
+          previewUrl: media.previewUrl,
+          crop: media.crop,
+          corners: media.documentCorners,
+        } satisfies NewMedia;
+      }),
+    ]);
   }
 
-  function goBack() {
-    const prev = EDIT_STEPS[stepIndex - 1];
-    if (prev) setStep(prev.id);
+  function removeExisting(id: string) {
+    deletedIds.current.add(id);
+    setPhotos((prev) => prev.filter((p) => p.id !== id));
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
   }
 
-  function editPhotoPatch(id: string, next: Partial<EditPhoto>) {
-    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)));
-  }
-
-  function deletePhoto(id: string) {
-    const photo = photos.find((p) => p.id === id);
-    if (photo?.serverId) deletedPhotoIds.current.add(photo.serverId);
-    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, deleted: true } : p)));
-  }
-
-  function deleteDoc(id: string) {
-    const existing = documents.find((d) => d.id === id);
-    if (existing?.serverId) {
-      deletedDocIds.current.add(existing.serverId);
-      setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, deleted: true } : d)));
-    } else {
-      setNewDocs((prev) => prev.filter((d) => d.id !== id));
+  function removeNew(id: string) {
+    for (const list of [newPhotos, newDocs]) {
+      const media = list.find((m) => m.id === id);
+      if (media?.previewUrl) URL.revokeObjectURL(media.previewUrl);
     }
+    setNewPhotos((prev) => prev.filter((m) => m.id !== id));
+    setNewDocs((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  function selectCover(id: string) {
+    setPhotos((prev) => prev.map((p) => ({ ...p, isCover: p.id === id })));
+    setNewPhotos((prev) => prev.map((p) => ({ ...p, isCover: p.id === id })));
   }
 
   return (
     <div className="min-w-0">
       <form
+        ref={formRef}
         className="mx-auto min-w-0 max-w-5xl"
         noValidate
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
           if (step === 'review' && !saving) {
             setSaving(true);
+            setSaveError(null);
             saveMutation.mutate();
           }
         }}
       >
         <fieldset disabled={saving} className="m-0 min-w-0 space-y-5 border-0 p-0">
           <header className="space-y-3" data-wizard-top>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-medium text-accent dark:text-teal-400">
-                  編輯持有庫存
-                </p>
-                <h1 className="text-2xl font-semibold tracking-tight">{asset.name}</h1>
-              </div>
+            <div>
+              <p className="text-sm font-medium text-accent dark:text-teal-400">編輯持有庫存</p>
+              <h1 className="text-2xl font-semibold tracking-tight">{asset.name}</h1>
             </div>
 
             <p
@@ -397,31 +287,32 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
               aria-valuemin={1}
               aria-valuemax={EDIT_STEPS.length}
               aria-valuenow={stepIndex + 1}
-              className="text-sm text-slate-600 dark:text-slate-300"
+              className="sr-only"
             >
-              第 {stepIndex + 1}／{EDIT_STEPS.length} 步：
-              {EDIT_STEPS[stepIndex]?.label}
+              第 {stepIndex + 1}／{EDIT_STEPS.length} 段：{EDIT_STEPS[stepIndex]?.label}
             </p>
 
-            <nav className="max-w-full overflow-x-auto pb-1" aria-label="編輯步驟">
-              <ol className="grid min-w-[34rem] grid-cols-6 gap-1">
-                {EDIT_STEPS.map((s, i) => (
+            {/*
+              Editing is not a linear wizard: every section already has data, so
+              any of them can be opened directly. Two rows of full-width buttons
+              also fit a phone without the horizontal scroll the six-column strip
+              needed.
+            */}
+            <nav aria-label="編輯區段">
+              <ol className="grid grid-cols-3 gap-1 sm:grid-cols-6">
+                {EDIT_STEPS.map((s) => (
                   <li key={s.id}>
                     <button
                       type="button"
                       aria-current={step === s.id ? 'step' : undefined}
-                      disabled={i > stepIndex}
-                      className={`min-h-11 w-full rounded-lg px-2 py-2 text-xs font-medium motion-safe:transition-colors ${
+                      className={`min-h-11 w-full rounded-lg px-1 text-xs font-medium motion-safe:transition-colors ${
                         step === s.id
                           ? 'bg-accent text-white shadow-sm'
-                          : i <= stepIndex
-                            ? 'interactive-muted bg-slate-100 dark:bg-slate-800'
-                            : 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-900 dark:text-slate-600'
+                          : 'interactive-muted bg-slate-100 dark:bg-slate-800'
                       }`}
-                      onClick={() => i <= stepIndex && setStep(s.id)}
+                      onClick={() => setStep(s.id)}
                     >
-                      <span className="block">{i + 1}</span>
-                      <span>{s.shortLabel}</span>
+                      {s.shortLabel}
                     </button>
                   </li>
                 ))}
@@ -429,160 +320,84 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
             </nav>
           </header>
 
-          <main className="min-w-0 motion-safe:transition-opacity">
+          <main className="min-w-0">
             {step === 'transaction' && (
-              <TransactionStep asset={asset} />
+              <TransactionStep asset={asset} form={purchaseForm} onChange={setPurchaseForm} />
             )}
-            {step === 'details' && (
-              <DetailsStep
-                asset={asset}
-                quantity={quantity}
-                unitWeight={unitWeight}
-                purity={purity}
-                serial={serial}
-                storageLocation={storageLocation}
-                name={name}
-                brand={brand}
-                country={country}
-                yearOrVersion={yearOrVersion}
-                packagingState={packagingState}
-                hasCertificate={hasCertificate}
-                onQuantity={setQuantity}
-                onUnitWeight={setUnitWeight}
-                onPurity={setPurity}
-                onSerial={setSerial}
-                onStorageLocation={setStorageLocation}
-                onName={setName}
-                onBrand={setBrand}
-                onCountry={setCountry}
-                onYearOrVersion={setYearOrVersion}
-                onPackagingState={setPackagingState}
-                onHasCertificate={setHasCertificate}
-              />
-            )}
+            {step === 'details' && <DetailsStep asset={asset} form={form} onChange={patchField} />}
             {step === 'costs' && (
               <CostsStep
                 currency={asset.currency}
-                allocatedCost={allocatedCost}
-                onChange={setAllocatedCost}
+                allocatedCost={form.allocatedCost}
+                onChange={(value) => patchField('allocatedCost', value)}
               />
             )}
             {step === 'photos' && (
               <PhotoStep
+                loading={attachments.isPending}
+                error={attachments.error?.message ?? null}
                 photos={photos}
-                newPhotos={newPhotoMedia}
-                onPatchExisting={editPhotoPatch}
-                onDeleteExisting={deletePhoto}
-                onPatchNew={(id, next) =>
-                  setNewPhotoMedia((prev) =>
-                    prev.map((p) => (p.id === id ? { ...p, ...next } : p)),
-                  )
+                newPhotos={newPhotos}
+                onPatch={(id, next) =>
+                  setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
                 }
-                onDeleteNew={(id) => {
-                  const photo = newPhotoMedia.find((p) => p.id === id);
-                  if (photo?.previewUrl) URL.revokeObjectURL(photo.previewUrl);
-                  setNewPhotoMedia((prev) => prev.filter((p) => p.id !== id));
-                }}
-                onSetCover={(id) => {
-                  setPhotos((prev) => prev.map((p) => ({ ...p, isCover: p.id === id })));
-                  setNewPhotoMedia((prev) => prev.map((p) => ({ ...p, isCover: p.id === id })));
-                }}
-                onAdd={(files) => {
-                  const isFirst = photos.filter((p) => !p.deleted).length === 0 && newPhotoMedia.length === 0;
-                  for (const file of files) {
-                    const media = createWizardMedia(file, 'ASSET_PHOTO', 'LIBRARY');
-                    setNewPhotoMedia((prev) => [
-                      ...prev,
-                      {
-                        id: media.id,
-                        kind: 'front',
-                        isCover: isFirst && prev.length === 0,
-                        description: '',
-                        filename: media.filename,
-                        mime: media.mime,
-                        sizeBytes: media.sizeBytes,
-                        source: 'LIBRARY',
-                        originalFile: file,
-                        previewUrl: media.previewUrl,
-                        crop: media.crop,
-                        needsReselection: false,
-                      },
-                    ]);
-                  }
-                }}
+                onPatchNew={(id, next) =>
+                  setNewPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
+                }
+                onDelete={removeExisting}
+                onDeleteNew={removeNew}
+                onSetCover={selectCover}
+                onAdd={(files, source) => addFiles(files, 'photo', source)}
               />
             )}
             {step === 'documents' && (
               <DocStep
+                loading={attachments.isPending}
+                error={attachments.error?.message ?? null}
                 documents={documents}
                 newDocs={newDocs}
-                onAdd={(files, source) => {
-                  for (const file of files) {
-                    const media = createWizardMedia(file, 'DOCUMENT', source);
-                    setNewDocs((prev) => [
-                      ...prev,
-                      {
-                        id: media.id,
-                        documentType: 'invoice',
-                        description: '',
-                        filename: media.filename,
-                        mime: media.mime,
-                        sizeBytes: media.sizeBytes,
-                        source,
-                        originalFile: file,
-                        previewUrl: media.previewUrl,
-                        corners: media.documentCorners,
-                        needsReselection: false,
-                      },
-                    ]);
-                  }
-                }}
-                onDelete={deleteDoc}
                 onPatch={(id, next) =>
-                  setDocuments((prev) =>
-                    prev.map((d) => (d.id === id ? { ...d, ...next } : d)),
-                  )
+                  setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
                 }
                 onPatchNew={(id, next) =>
-                  setNewDocs((prev) =>
-                    prev.map((d) => (d.id === id ? { ...d, ...next } : d)),
-                  )
+                  setNewDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
                 }
+                onDelete={removeExisting}
+                onDeleteNew={removeNew}
+                onAdd={(files, source) => addFiles(files, 'document', source)}
               />
             )}
             {step === 'review' && (
               <ReviewStep
                 asset={asset}
-                name={name}
-                serial={serial}
-                storageLocation={storageLocation}
-                brand={brand}
-                country={country}
-                yearOrVersion={yearOrVersion}
-                packagingState={packagingState}
-                hasCertificate={hasCertificate}
-                quantity={quantity}
-                unitWeight={unitWeight}
-                purity={purity}
-                allocatedCost={allocatedCost}
-                photoCount={photos.filter((p) => !p.deleted).length + newPhotoMedia.filter((p) => !p.deleted).length}
-                docCount={newDocs.filter((d) => !d.deleted).length}
+                form={form}
+                purchaseForm={purchaseForm}
+                photoCount={photos.length + newPhotos.length}
+                docCount={documents.length + newDocs.length}
+                addedCount={newPhotos.length + newDocs.length}
+                removedCount={deletedIds.current.size}
               />
             )}
           </main>
 
           {saveError && (
-            <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950">
+            <p
+              role="alert"
+              className="rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950"
+            >
               {saveError}
             </p>
           )}
 
-          <footer className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:mx-0 sm:rounded-xl sm:border">
+          <footer className="sticky-action-bar -mx-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-4 pt-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:mx-0 sm:rounded-xl sm:border">
             <button
               type="button"
               disabled={stepIndex === 0 || saving}
               className="interactive-muted rounded-lg px-4 font-medium disabled:opacity-30"
-              onClick={goBack}
+              onClick={() => {
+                const previous = EDIT_STEPS[stepIndex - 1];
+                if (previous) setStep(previous.id);
+              }}
             >
               上一步
             </button>
@@ -598,7 +413,10 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
               <button
                 type="button"
                 className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
-                onClick={goNext}
+                onClick={() => {
+                  const next = EDIT_STEPS[stepIndex + 1];
+                  if (next) setStep(next.id);
+                }}
               >
                 下一步
               </button>
@@ -618,17 +436,97 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
   );
 }
 
-function TransactionStep({ asset }: { asset: HeldAssetListItem }) {
+function TransactionStep({
+  asset,
+  form,
+  onChange,
+}: {
+  asset: HeldAssetListItem;
+  form: PurchaseEditForm;
+  onChange: (next: PurchaseEditForm) => void;
+}) {
+  const set = (key: keyof PurchaseEditForm) => (value: string) =>
+    onChange({ ...form, [key]: value });
+
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">交易資訊</h2>
+      {asset.purchase ? (
+        <>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            這些欄位屬於整筆買入，同一筆交易的其他批次也會一起更新。
+          </p>
+          <div className="surface rounded-xl p-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <EditField
+                label="交易商"
+                value={form.dealerName}
+                onChange={set('dealerName')}
+                maxLength={200}
+              />
+              <EditField
+                label="分店／櫃點"
+                value={form.branch}
+                onChange={set('branch')}
+                maxLength={200}
+              />
+              <EditField
+                label="訂單編號"
+                value={form.orderNumber}
+                onChange={set('orderNumber')}
+                maxLength={120}
+              />
+              <EditField
+                label="發票號碼"
+                value={form.invoiceNumber}
+                onChange={set('invoiceNumber')}
+                maxLength={120}
+              />
+              <EditField
+                label="付款方式"
+                value={form.paymentMethod}
+                onChange={set('paymentMethod')}
+                maxLength={60}
+              />
+              <label className="block space-y-1 text-sm sm:col-span-2">
+                <span className="font-medium">備註</span>
+                <textarea
+                  className="w-full rounded-lg border px-2 py-1.5"
+                  rows={3}
+                  maxLength={2000}
+                  value={form.notes}
+                  onChange={(event) => set('notes')(event.target.value)}
+                />
+              </label>
+            </div>
+          </div>
+        </>
+      ) : (
+        <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+          這批庫存不是由買入建立的，沒有可編輯的交易資訊。
+        </p>
+      )}
+
       <div className="surface rounded-xl p-4">
-        <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <InfoItem label="交易商" value={asset.purchase?.dealerName ?? '—'} />
-          <InfoItem label="購入日期" value={asset.purchase?.purchasedAt ? new Date(asset.purchase.purchasedAt).toLocaleDateString('zh-TW') : '—'} />
+        <h3 className="font-medium">不可修改</h3>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+          購入日期與幣別決定了這筆交易的成本分攤與購入當下行情快照，改動會讓已存的溢價與熔值失真，因此只能透過重新建檔更正。
+        </p>
+        <dl className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <InfoItem
+            label="購入日期"
+            value={
+              asset.purchase?.purchasedAt
+                ? new Date(asset.purchase.purchasedAt).toLocaleDateString('zh-TW')
+                : '—'
+            }
+          />
           <InfoItem label="幣別" value={asset.currency} />
           <InfoItem label="金屬" value={`${asset.metal.code} — ${asset.metal.name}`} />
-          <InfoItem label="形式" value={asset.form ?? '—'} />
+          <InfoItem
+            label="入庫時間"
+            value={new Date(asset.acquiredAt).toLocaleDateString('zh-TW')}
+          />
         </dl>
       </div>
     </section>
@@ -637,52 +535,127 @@ function TransactionStep({ asset }: { asset: HeldAssetListItem }) {
 
 function DetailsStep({
   asset,
-  quantity, onQuantity,
-  unitWeight, onUnitWeight,
-  purity, onPurity,
-  serial, onSerial,
-  storageLocation, onStorageLocation,
-  name, onName,
-  brand, onBrand,
-  country, onCountry,
-  yearOrVersion, onYearOrVersion,
-  packagingState, onPackagingState,
-  hasCertificate, onHasCertificate,
+  form,
+  onChange,
 }: {
   asset: HeldAssetListItem;
-  quantity: string; onQuantity: (v: string) => void;
-  unitWeight: string; onUnitWeight: (v: string) => void;
-  purity: string; onPurity: (v: string) => void;
-  serial: string; onSerial: (v: string) => void;
-  storageLocation: string; onStorageLocation: (v: string) => void;
-  name: string; onName: (v: string) => void;
-  brand: string; onBrand: (v: string) => void;
-  country: string; onCountry: (v: string) => void;
-  yearOrVersion: string; onYearOrVersion: (v: string) => void;
-  packagingState: string; onPackagingState: (v: string) => void;
-  hasCertificate: boolean; onHasCertificate: (v: boolean) => void;
+  form: AssetEditForm;
+  onChange: <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) => void;
 }) {
-  const hasProduct = Boolean(asset.productDefinitionId);
+  const linked = Boolean(asset.productDefinitionId);
+
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">商品資訊</h2>
+      {linked && (
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          這批庫存連結了商品規格。以下描述欄位預設沿用規格內容，改寫只會影響這一批，清空即可恢復沿用。
+        </p>
+      )}
       <div className="surface rounded-xl p-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <EditField label="數量" type="number" inputMode="numeric" min="1" step="1" value={quantity} onChange={onQuantity} />
-          <EditField label="單件重量 (g)" type="number" inputMode="decimal" min="0.000000001" step="any" value={unitWeight} onChange={onUnitWeight} />
-          <EditField label="純度" type="number" inputMode="decimal" min="0.0000001" max="1" step="any" value={purity} onChange={onPurity} />
-          <EditField label="商品名稱" value={name} onChange={onName} />
-          {!hasProduct && <EditField label="品牌" value={brand} onChange={onBrand} />}
-          {!hasProduct && <EditField label="國家" value={country} onChange={onCountry} />}
-          <EditField label="年份/版本" value={yearOrVersion} onChange={onYearOrVersion} />
-          <EditField label="序號" value={serial} onChange={onSerial} maxLength={128} />
-          <EditField label="存放位置" value={storageLocation} onChange={onStorageLocation} maxLength={128} />
-          <label className="block space-y-1 text-sm">
-            <span className="font-medium">包裝狀態</span>
-            <input className="w-full rounded-lg border px-2 py-1.5" value={packagingState} onChange={(e) => onPackagingState(e.target.value)} maxLength={64} />
-          </label>
-          <label className="flex min-h-11 items-center gap-3 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600">
-            <input type="checkbox" className="h-5 w-5" checked={hasCertificate} onChange={(e) => onHasCertificate(e.target.checked)} />
+          <OverrideField
+            label="商品名稱"
+            field="name"
+            asset={asset}
+            form={form}
+            onChange={onChange}
+          />
+          <OverrideField
+            label="形式"
+            field="form"
+            asset={asset}
+            form={form}
+            onChange={onChange}
+            options={productFormOptions(asset.metal.code)}
+            renderInherited={(value) => productFormLabel(value, asset.metal.code)}
+          />
+          <OverrideField label="品牌" field="brand" asset={asset} form={form} onChange={onChange} />
+          <OverrideField
+            label="國家"
+            field="country"
+            asset={asset}
+            form={form}
+            onChange={onChange}
+          />
+          <OverrideField
+            label="年份／版本"
+            field="yearOrVersion"
+            asset={asset}
+            form={form}
+            onChange={onChange}
+          />
+
+          <EditField
+            label="數量"
+            type="number"
+            inputMode="numeric"
+            min="1"
+            step="1"
+            value={form.quantity}
+            onChange={(value) => onChange('quantity', value)}
+          />
+          <div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-2">
+            <EditField
+              label="單件重量"
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              value={form.unitWeight}
+              onChange={(value) => onChange('unitWeight', value)}
+            />
+            <CustomSelect
+              label="重量單位"
+              value={form.weightUnit}
+              onChange={(next) => {
+                const unit = next as WeightUnit;
+                // Re-express the same physical weight so switching units is a
+                // display change, never a silent edit of the stored grams.
+                onChange('unitWeight', unitWeightInUnit(asset.unitWeightGrams, unit));
+                onChange('weightUnit', unit);
+              }}
+              options={WEIGHT_UNITS.map((unit) => ({
+                value: unit,
+                label: WEIGHT_UNIT_LONG_LABELS[unit],
+              }))}
+            />
+          </div>
+          <EditField
+            label="純度"
+            type="number"
+            inputMode="decimal"
+            min="0"
+            max="1"
+            step="any"
+            value={form.purity}
+            onChange={(value) => onChange('purity', value)}
+          />
+          <EditField
+            label="序號"
+            value={form.serial}
+            onChange={(value) => onChange('serial', value)}
+            maxLength={128}
+          />
+          <EditField
+            label="存放位置"
+            value={form.storageLocation}
+            onChange={(value) => onChange('storageLocation', value)}
+            maxLength={128}
+          />
+          <EditField
+            label="包裝狀態"
+            value={form.packagingState}
+            onChange={(value) => onChange('packagingState', value)}
+            maxLength={64}
+          />
+          <label className="flex min-h-11 items-center gap-3 self-end rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600">
+            <input
+              type="checkbox"
+              className="h-5 w-5"
+              checked={form.hasCertificate}
+              onChange={(event) => onChange('hasCertificate', event.target.checked)}
+            />
             <span className="font-medium">附有證書</span>
           </label>
         </div>
@@ -691,14 +664,88 @@ function DetailsStep({
   );
 }
 
-function CostsStep({ currency, allocatedCost, onChange }: { currency: string; allocatedCost: string; onChange: (v: string) => void }) {
+/**
+ * A descriptive field that may follow the product catalog. It shows what the
+ * field would read if cleared, and offers a one-tap restore when this lot has
+ * diverged, so "edit just this one" and "go back to the catalog" are both
+ * reachable without leaving the screen.
+ */
+function OverrideField({
+  label,
+  field,
+  asset,
+  form,
+  onChange,
+  options,
+  renderInherited = (value: string) => value,
+}: {
+  label: string;
+  field: OverridableField;
+  asset: HeldAssetListItem;
+  form: AssetEditForm;
+  onChange: <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) => void;
+  options?: ReadonlyArray<readonly [string, string]>;
+  renderInherited?: (value: string) => string;
+}) {
+  const inheritedValue = asset.inherited?.[field] ?? null;
+  const diverged = inheritedValue !== null && form[field].trim() !== inheritedValue;
+
+  return (
+    <div className="space-y-1">
+      {options ? (
+        <CustomSelect
+          label={label}
+          value={form[field]}
+          onChange={(value) => onChange(field, value)}
+          options={options.map(([value, optionLabel]) => ({ value, label: optionLabel }))}
+        />
+      ) : (
+        <EditField label={label} value={form[field]} onChange={(value) => onChange(field, value)} />
+      )}
+      {inheritedValue !== null && (
+        <p className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <span>商品規格：{renderInherited(inheritedValue)}</span>
+          {diverged && (
+            <button
+              type="button"
+              className="min-h-0 rounded px-1 font-medium text-accent underline-offset-2 hover:underline dark:text-teal-400"
+              onClick={() => onChange(field, inheritedValue)}
+            >
+              恢復沿用
+            </button>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CostsStep({
+  currency,
+  allocatedCost,
+  onChange,
+}: {
+  currency: string;
+  allocatedCost: string;
+  onChange: (value: string) => void;
+}) {
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">成本</h2>
       <div className="surface rounded-xl p-4">
         <div className="max-w-xs">
-          <EditField label={`分攤成本 (${currency})`} type="number" inputMode="decimal" min="0" step="any" value={allocatedCost} onChange={onChange} />
-          <p className="mt-1 text-xs text-slate-400">更正持有成本，不影響原始入庫總額</p>
+          <EditField
+            label={`分攤成本 (${currency})`}
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="any"
+            value={allocatedCost}
+            onChange={onChange}
+          />
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            更正持有成本，不影響原始入庫總額。
+          </p>
         </div>
       </div>
     </section>
@@ -706,22 +753,28 @@ function CostsStep({ currency, allocatedCost, onChange }: { currency: string; al
 }
 
 function PhotoStep({
-  photos, newPhotos, onPatchExisting, onDeleteExisting, onPatchNew, onDeleteNew, onSetCover, onAdd,
+  loading,
+  error,
+  photos,
+  newPhotos,
+  onPatch,
+  onPatchNew,
+  onDelete,
+  onDeleteNew,
+  onSetCover,
+  onAdd,
 }: {
-  photos: EditPhoto[];
-  newPhotos: EditPhoto[];
-  asset?: HeldAssetListItem;
-  onPatchExisting: (id: string, next: Partial<EditPhoto>) => void;
-  onDeleteExisting: (id: string) => void;
-  onPatchNew: (id: string, next: Partial<EditPhoto>) => void;
+  loading: boolean;
+  error: string | null;
+  photos: ExistingPhoto[];
+  newPhotos: NewMedia[];
+  onPatch: (id: string, next: Partial<ExistingPhoto>) => void;
+  onPatchNew: (id: string, next: Partial<NewMedia>) => void;
+  onDelete: (id: string) => void;
   onDeleteNew: (id: string) => void;
   onSetCover: (id: string) => void;
-  onAdd: (files: File[]) => void;
+  onAdd: (files: File[], source: 'CAMERA' | 'LIBRARY') => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const existingPhotos = photos.filter((p) => !p.deleted);
-  const activeNew = newPhotos.filter((p) => !p.deleted);
-
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">照片管理</h2>
@@ -729,166 +782,219 @@ function PhotoStep({
         新增或移除商品照片。主要照片會顯示在庫存清單中。
       </p>
 
-      <input
-        ref={inputRef}
-        className="sr-only"
-        type="file"
+      <MediaPicker
+        onAdd={onAdd}
         accept=".jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif"
-        multiple
-        onChange={(event) => {
-          const files = Array.from(event.currentTarget.files ?? []);
-          event.currentTarget.value = '';
-          onAdd(files);
-        }}
+        cameraAccept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        chooseLabel="新增照片"
       />
-      <button
-        type="button"
-        className="rounded-xl bg-accent px-4 py-3 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
-        onClick={() => inputRef.current?.click()}
-      >
-        新增照片
-      </button>
 
-      {existingPhotos.length === 0 && activeNew.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
-          尚無照片
-        </p>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {existingPhotos.map((photo) => (
-            <ExistingPhotoCard
-              key={photo.id}
-              photo={photo}
-              onPatch={(next) => onPatchExisting(photo.id, next)}
-              onDelete={() => onDeleteExisting(photo.id)}
-              onSetCover={() => onSetCover(photo.id)}
-            />
-          ))}
-          {activeNew.map((photo) => (
-            <NewPhotoCard
-              key={photo.id}
-              photo={photo}
-              onPatch={(next) => onPatchNew(photo.id, next)}
-              onDelete={() => onDeleteNew(photo.id)}
-              onSetCover={() => onSetCover(photo.id)}
-            />
-          ))}
-        </div>
-      )}
+      <AttachmentListState
+        loading={loading}
+        error={error}
+        empty={photos.length === 0 && newPhotos.length === 0}
+        emptyLabel="尚無照片"
+      />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {photos.map((photo) => (
+          <MediaCard
+            key={photo.id}
+            title={photo.filename}
+            preview={
+              <ExistingPreview
+                attachmentId={photo.id}
+                variant={photo.variant}
+                mime={photo.mime}
+                alt={photo.filename}
+              />
+            }
+            kindOptions={PHOTO_KINDS}
+            kind={photo.kind}
+            onKind={(kind) => onPatch(photo.id, { kind })}
+            description={photo.description}
+            onDescription={(description) => onPatch(photo.id, { description })}
+            isCover={photo.isCover}
+            onSetCover={() => onSetCover(photo.id)}
+            onDelete={() => onDelete(photo.id)}
+          />
+        ))}
+        {newPhotos.map((photo) => (
+          <MediaCard
+            key={photo.id}
+            title={photo.filename}
+            badge="尚未上傳"
+            preview={
+              photo.previewUrl ? (
+                <img
+                  src={photo.previewUrl}
+                  alt={photo.filename}
+                  className="max-h-48 max-w-full rounded object-contain"
+                />
+              ) : null
+            }
+            kindOptions={PHOTO_KINDS}
+            kind={photo.kind}
+            onKind={(kind) => onPatchNew(photo.id, { kind })}
+            description={photo.description}
+            onDescription={(description) => onPatchNew(photo.id, { description })}
+            isCover={photo.isCover}
+            onSetCover={() => onSetCover(photo.id)}
+            onDelete={() => onDeleteNew(photo.id)}
+          />
+        ))}
+      </div>
     </section>
   );
 }
 
-function ExistingPhotoCard({
-  photo, onPatch, onDelete, onSetCover,
-}: {
-  photo: EditPhoto;
-  onPatch: (next: Partial<EditPhoto>) => void;
-  onDelete: () => void;
-  onSetCover: () => void;
-}) {
-  const signedUrl = useQuery({
-    queryKey: ['attachment-read-url', photo.serverId, photo.variantKind, photo.variantRevision],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      if (photo.variantKind) params.set('variant', photo.variantKind);
-      if (photo.variantRevision) params.set('revision', String(photo.variantRevision));
-      return api.get<{ url: string }>(
-        `/attachments/${encodeURIComponent(photo.serverId!)}/url?${params.toString()}`,
-      );
-    },
-    enabled: Boolean(photo.serverId),
-    staleTime: 20_000,
-  });
-
-  return (
-    <div className="surface min-w-0 space-y-3 rounded-xl p-3">
-      <div className="flex min-h-32 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800">
-        {signedUrl.isPending ? (
-          <div className="h-32 w-full animate-pulse rounded-lg bg-slate-200 dark:bg-slate-700" />
-        ) : signedUrl.data?.url ? (
-          <img src={signedUrl.data.url} alt={photo.filename} className="max-h-48 max-w-full rounded object-contain" loading="lazy" decoding="async" />
-        ) : (
-          <p className="text-xs text-slate-500">載入失敗</p>
-        )}
-      </div>
-      <input className="w-full rounded-lg border px-2 py-1.5 text-sm" placeholder="說明（選填）" maxLength={200}
-        value={photo.description} onChange={(e) => onPatch({ description: e.target.value })} />
-      <div className="flex items-center gap-2">
-        <button type="button" onClick={onSetCover} className={`min-h-11 rounded-lg px-3 text-sm font-medium ${photo.isCover ? 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200' : 'border'}`}>
-          {photo.isCover ? '✓ 主要照片' : '設為主要'}
-        </button>
-        <button type="button" onClick={onDelete} className="ml-auto rounded-lg px-3 text-sm font-medium text-danger hover:bg-red-50 dark:hover:bg-red-950">
-          移除
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function NewPhotoCard({
-  photo, onPatch, onDelete, onSetCover,
-}: {
-  photo: EditPhoto;
-  onPatch: (next: Partial<EditPhoto>) => void;
-  onDelete: () => void;
-  onSetCover: () => void;
-}) {
-  return (
-    <div className="surface min-w-0 space-y-3 rounded-xl p-3">
-      {photo.previewUrl && (
-        <div className="relative mx-auto w-fit max-w-full overflow-hidden rounded-lg bg-slate-950">
-          <img src={photo.previewUrl} alt={photo.filename} className="block max-h-48 w-auto max-w-full object-contain" />
-        </div>
-      )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <select className="rounded-lg border px-2 py-1.5 text-sm" value={photo.kind} onChange={(e) => onPatch({ kind: e.target.value })}>
-          <option value="front">正面</option>
-          <option value="back">背面</option>
-          <option value="side">側面／幣邊</option>
-          <option value="serial">序號</option>
-          <option value="security">防偽標誌</option>
-          <option value="packaging">包裝</option>
-        </select>
-      </div>
-      <input className="w-full rounded-lg border px-2 py-1.5 text-sm" placeholder="說明（選填）" maxLength={200}
-        value={photo.description} onChange={(e) => onPatch({ description: e.target.value })} />
-      <div className="flex items-center gap-2">
-        <button type="button" onClick={onSetCover} className={`min-h-11 rounded-lg px-3 text-sm font-medium ${photo.isCover ? 'bg-teal-100 text-teal-800' : 'border'}`}>
-          {photo.isCover ? '✓ 主要照片' : '設為主要'}
-        </button>
-        <button type="button" onClick={onDelete} className="ml-auto rounded-lg px-3 text-sm font-medium text-danger">
-          移除
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function DocStep({
-  documents, newDocs, onAdd, onDelete, onPatch, onPatchNew,
+  loading,
+  error,
+  documents,
+  newDocs,
+  onPatch,
+  onPatchNew,
+  onDelete,
+  onDeleteNew,
+  onAdd,
 }: {
-  documents: EditDocument[];
-  newDocs: EditDocument[];
-  onAdd: (files: File[], source: 'LIBRARY' | 'CAMERA') => void;
+  loading: boolean;
+  error: string | null;
+  documents: ExistingDocument[];
+  newDocs: NewMedia[];
+  onPatch: (id: string, next: Partial<ExistingDocument>) => void;
+  onPatchNew: (id: string, next: Partial<NewMedia>) => void;
   onDelete: (id: string) => void;
-  onPatch: (id: string, next: Partial<EditDocument>) => void;
-  onPatchNew: (id: string, next: Partial<EditDocument>) => void;
+  onDeleteNew: (id: string) => void;
+  onAdd: (files: File[], source: 'CAMERA' | 'LIBRARY') => void;
 }) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
-  const allDocs = [...documents.filter((d) => !d.deleted), ...newDocs.filter((d) => !d.deleted)];
-  const MIME_TYPES = '.jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf';
-
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">文件</h2>
-      <p className="text-sm text-slate-600 dark:text-slate-300">上傳發票、收據或證書等文件。</p>
+      <p className="text-sm text-slate-600 dark:text-slate-300">
+        發票、收據與證書。標示「整筆交易」的文件由同一筆買入的所有批次共用，移除後其他批次也看不到。
+      </p>
+
+      <MediaPicker
+        onAdd={onAdd}
+        accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
+        cameraAccept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        chooseLabel="選擇檔案"
+      />
+
+      <AttachmentListState
+        loading={loading}
+        error={error}
+        empty={documents.length === 0 && newDocs.length === 0}
+        emptyLabel="尚無文件"
+      />
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {documents.map((doc) => (
+          <MediaCard
+            key={doc.id}
+            title={doc.filename}
+            badge={doc.purchaseScoped ? '整筆交易' : '本批次'}
+            preview={
+              <ExistingPreview
+                attachmentId={doc.id}
+                variant={doc.variant}
+                mime={doc.mime}
+                alt={doc.filename}
+              />
+            }
+            kindOptions={DOCUMENT_KINDS}
+            kind={doc.kind}
+            onKind={(kind) => onPatch(doc.id, { kind })}
+            description={doc.description}
+            onDescription={(description) => onPatch(doc.id, { description })}
+            onDelete={() => onDelete(doc.id)}
+          />
+        ))}
+        {newDocs.map((doc) => (
+          <MediaCard
+            key={doc.id}
+            title={doc.filename}
+            badge="尚未上傳"
+            preview={
+              doc.previewUrl && documentPreview(doc.mime) === 'image' ? (
+                <img
+                  src={doc.previewUrl}
+                  alt={doc.filename}
+                  className="max-h-48 max-w-full rounded object-contain"
+                />
+              ) : (
+                <FileGlyph mime={doc.mime} />
+              )
+            }
+            kindOptions={DOCUMENT_KINDS}
+            kind={doc.kind}
+            onKind={(kind) => onPatchNew(doc.id, { kind })}
+            description={doc.description}
+            onDescription={(description) => onPatchNew(doc.id, { description })}
+            onDelete={() => onDeleteNew(doc.id)}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AttachmentListState({
+  loading,
+  error,
+  empty,
+  emptyLabel,
+}: {
+  loading: boolean;
+  error: string | null;
+  empty: boolean;
+  emptyLabel: string;
+}) {
+  if (loading) {
+    return (
+      <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+        正在讀取附件…
+      </p>
+    );
+  }
+  if (error) {
+    return (
+      <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950">
+        無法讀取附件：{error}
+      </p>
+    );
+  }
+  if (!empty) return null;
+  return (
+    <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+      {emptyLabel}
+    </p>
+  );
+}
+
+function MediaPicker({
+  onAdd,
+  accept,
+  cameraAccept,
+  chooseLabel,
+}: {
+  onAdd: (files: File[], source: 'CAMERA' | 'LIBRARY') => void;
+  accept: string;
+  cameraAccept: string;
+  chooseLabel: string;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div className="flex flex-wrap gap-2">
       <input
         ref={fileRef}
         className="sr-only"
         type="file"
-        accept={MIME_TYPES}
+        accept={accept}
         multiple
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []);
@@ -900,7 +1006,7 @@ function DocStep({
         ref={cameraRef}
         className="sr-only"
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        accept={cameraAccept}
         capture="environment"
         onChange={(event) => {
           const files = Array.from(event.currentTarget.files ?? []);
@@ -908,110 +1014,281 @@ function DocStep({
           onAdd(files, 'CAMERA');
         }}
       />
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className="rounded-xl bg-accent px-4 py-3 font-medium text-white" onClick={() => fileRef.current?.click()}>
-          選擇檔案
-        </button>
-        <button type="button" className="rounded-xl border px-4 py-3 font-medium" onClick={() => cameraRef.current?.click()}>
-          拍照
+      <button
+        type="button"
+        className="rounded-xl bg-accent px-4 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
+        onClick={() => fileRef.current?.click()}
+      >
+        {chooseLabel}
+      </button>
+      <button
+        type="button"
+        className="rounded-xl border px-4 font-medium"
+        onClick={() => cameraRef.current?.click()}
+      >
+        拍照
+      </button>
+    </div>
+  );
+}
+
+function MediaCard({
+  title,
+  badge,
+  preview,
+  kindOptions,
+  kind,
+  onKind,
+  description,
+  onDescription,
+  isCover,
+  onSetCover,
+  onDelete,
+}: {
+  title: string;
+  badge?: string;
+  preview: ReactNode;
+  kindOptions: ReadonlyArray<readonly [string, string]>;
+  kind: string;
+  onKind: (kind: string) => void;
+  description: string;
+  onDescription: (description: string) => void;
+  isCover?: boolean;
+  onSetCover?: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="surface min-w-0 space-y-3 rounded-xl p-3">
+      <div className="flex min-h-32 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800">
+        {preview}
+      </div>
+      <div className="flex min-w-0 items-start gap-2">
+        <p className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">{title}</p>
+        {badge && (
+          <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+            {badge}
+          </span>
+        )}
+      </div>
+      <CustomSelect
+        label="類型"
+        value={kind}
+        onChange={onKind}
+        options={kindOptions.map(([value, label]) => ({ value, label }))}
+      />
+      <input
+        className="w-full rounded-lg border px-2 py-1.5 text-sm"
+        placeholder="說明（選填）"
+        maxLength={200}
+        value={description}
+        onChange={(event) => onDescription(event.target.value)}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        {onSetCover && (
+          <button
+            type="button"
+            onClick={onSetCover}
+            className={`min-h-11 rounded-lg px-3 text-sm font-medium ${
+              isCover ? 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200' : 'border'
+            }`}
+          >
+            {isCover ? '✓ 主要照片' : '設為主要'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onDelete}
+          className="ml-auto rounded-lg px-3 text-sm font-medium text-danger hover:bg-red-50 dark:hover:bg-red-950"
+        >
+          移除
         </button>
       </div>
-      {allDocs.length === 0 && (
-        <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600">尚無文件</p>
-      )}
-      <ol className="space-y-4">
-        {documents.filter((d) => !d.deleted).map((doc) => (
-          <li key={doc.id} className="surface min-w-0 space-y-3 rounded-xl p-3">
-            <p className="text-sm font-medium">{doc.filename}</p>
-            <select className="rounded-lg border px-2 py-1.5 text-sm" value={doc.documentType} onChange={(e) => onPatch(doc.id, { documentType: e.target.value })}>
-              <option value="invoice">發票</option>
-              <option value="receipt">收據</option>
-              <option value="certificate">證書</option>
-              <option value="warranty_card">保卡</option>
-            </select>
-            <button type="button" onClick={() => onDelete(doc.id)} className="rounded-lg px-3 text-sm font-medium text-danger">
-              移除
-            </button>
-          </li>
-        ))}
-        {newDocs.filter((d) => !d.deleted).map((doc) => (
-          <li key={doc.id} className="surface min-w-0 space-y-3 rounded-xl p-3">
-            <p className="text-sm font-medium">{doc.filename}</p>
-            <select className="rounded-lg border px-2 py-1.5 text-sm" value={doc.documentType} onChange={(e) => onPatchNew(doc.id, { documentType: e.target.value })}>
-              <option value="invoice">發票</option>
-              <option value="receipt">收據</option>
-              <option value="certificate">證書</option>
-              <option value="warranty_card">保卡</option>
-            </select>
-            <button type="button" onClick={() => onDelete(doc.id)} className="rounded-lg px-3 text-sm font-medium text-danger">
-              移除
-            </button>
-          </li>
-        ))}
-      </ol>
-    </section>
+    </div>
+  );
+}
+
+/**
+ * Preview of a file that already lives in private storage. Images render in
+ * place; a PDF gets an explicit open action, because an inline-disposition
+ * signed URL is the only way the browser will show it rather than download it.
+ */
+function ExistingPreview({
+  attachmentId,
+  variant,
+  mime,
+  alt,
+}: {
+  attachmentId: string;
+  variant: { kind: string; revision: number } | null;
+  mime: string;
+  alt: string;
+}) {
+  const kind = documentPreview(mime);
+  const signedUrl = useQuery({
+    queryKey: [
+      'attachment-read-url',
+      attachmentId,
+      variant?.kind ?? null,
+      variant?.revision ?? null,
+      'inline',
+    ],
+    queryFn: () => api.get<{ url: string }>(attachmentReadPath(attachmentId, variant, 'inline')),
+    staleTime: 20_000,
+    retry: 1,
+  });
+
+  if (signedUrl.isPending) {
+    return <div className="h-32 w-full animate-pulse rounded-lg bg-slate-200 dark:bg-slate-700" />;
+  }
+  if (!signedUrl.data?.url) {
+    return (
+      <button
+        type="button"
+        className="px-3 text-xs font-medium text-accent underline-offset-2 hover:underline dark:text-teal-400"
+        onClick={() => void signedUrl.refetch()}
+      >
+        載入失敗，重試
+      </button>
+    );
+  }
+  if (kind === 'image') {
+    return (
+      <img
+        src={signedUrl.data.url}
+        alt={alt}
+        className="max-h-48 max-w-full rounded object-contain"
+        loading="lazy"
+        decoding="async"
+      />
+    );
+  }
+  return (
+    <div className="flex flex-col items-center gap-2 p-3 text-center">
+      <FileGlyph mime={mime} />
+      <a
+        href={signedUrl.data.url}
+        target="_blank"
+        rel="noreferrer"
+        className="text-sm font-medium text-accent underline-offset-2 hover:underline dark:text-teal-400"
+      >
+        開啟預覽
+      </a>
+    </div>
+  );
+}
+
+function FileGlyph({ mime }: { mime: string }) {
+  return (
+    <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+      {mime === 'application/pdf' ? 'PDF 文件' : mime || '檔案'}
+    </span>
   );
 }
 
 function ReviewStep({
-  asset, name, serial, storageLocation, brand, country, yearOrVersion,
-  packagingState, hasCertificate, quantity, unitWeight, purity, allocatedCost,
-  photoCount, docCount,
+  asset,
+  form,
+  purchaseForm,
+  photoCount,
+  docCount,
+  addedCount,
+  removedCount,
 }: {
   asset: HeldAssetListItem;
-  name: string; serial: string; storageLocation: string;
-  brand: string; country: string; yearOrVersion: string;
-  packagingState: string; hasCertificate: boolean;
-  quantity: string; unitWeight: string; purity: string; allocatedCost: string;
-  photoCount: number; docCount: number;
+  form: AssetEditForm;
+  purchaseForm: PurchaseEditForm;
+  photoCount: number;
+  docCount: number;
+  addedCount: number;
+  removedCount: number;
 }) {
   const changes: { label: string; before: string; after: string }[] = [];
   const push = (label: string, before: string, after: string) => {
-    if (before !== after) changes.push({ label, before: before || '未設定', after: after || '未設定' });
+    if (before.trim() !== after.trim()) {
+      changes.push({ label, before: before || '未設定', after: after || '未設定' });
+    }
   };
-  push('商品名稱', asset.name ?? '', name);
-  push('數量', String(asset.quantity), quantity);
-  push('單件重量', formatGrams(asset.unitWeightGrams, 'g') as string, `${unitWeight} g`);
-  push('純度', `${Number(asset.purity) * 100}%`, `${Number(purity) * 100}%`);
-  push('分攤成本', formatMoney(asset.allocatedCost, asset.currency) as string, formatMoney(allocatedCost, asset.currency) as string);
-  push('序號', asset.serial ?? '', serial);
-  push('存放位置', asset.storageLocation ?? '', storageLocation);
-  push('品牌', asset.brand ?? '', brand);
-  push('國家', asset.country ?? '', country);
-  push('年份/版本', asset.yearOrVersion ?? '', yearOrVersion);
-  push('包裝狀態', asset.packagingState ?? '', packagingState);
-  if (asset.hasCertificate !== hasCertificate) {
-    push('附有證書', asset.hasCertificate ? '是' : '否', hasCertificate ? '是' : '否');
+
+  const labels: Record<OverridableField, string> = {
+    name: '商品名稱',
+    form: '形式',
+    brand: '品牌',
+    country: '國家',
+    yearOrVersion: '年份／版本',
+  };
+  for (const field of OVERRIDABLE_FIELDS) {
+    push(labels[field], asset[field] ?? '', form[field]);
   }
+  push('數量', String(asset.quantity), form.quantity);
+  push(
+    '單件重量',
+    formatGrams(asset.unitWeightGrams, 'g'),
+    `${form.unitWeight} ${form.weightUnit}`,
+  );
+  push('純度', asset.purity, form.purity);
+  push(
+    '分攤成本',
+    formatMoney(asset.allocatedCost, asset.currency),
+    formatMoney(form.allocatedCost || '0', asset.currency),
+  );
+  push('序號', asset.serial ?? '', form.serial);
+  push('存放位置', asset.storageLocation ?? '', form.storageLocation);
+  push('包裝狀態', asset.packagingState ?? '', form.packagingState);
+  if (asset.hasCertificate !== form.hasCertificate) {
+    push('附有證書', asset.hasCertificate ? '是' : '否', form.hasCertificate ? '是' : '否');
+  }
+
+  const original = initialPurchaseForm(asset);
+  const purchaseLabels: Record<keyof PurchaseEditForm, string> = {
+    dealerName: '交易商',
+    branch: '分店／櫃點',
+    orderNumber: '訂單編號',
+    invoiceNumber: '發票號碼',
+    paymentMethod: '付款方式',
+    notes: '備註',
+  };
+  for (const key of Object.keys(purchaseLabels) as (keyof PurchaseEditForm)[]) {
+    push(purchaseLabels[key], original[key], purchaseForm[key]);
+  }
+
+  const nothingChanged = changes.length === 0 && addedCount === 0 && removedCount === 0;
 
   return (
     <section className="space-y-4">
       <h2 className="text-xl font-semibold">確認變更</h2>
-      {changes.length === 0 && photoCount === 0 && docCount === 0 ? (
-        <p className="rounded-xl border border-slate-300 p-4 text-sm text-slate-500">未做任何變更。</p>
+      {nothingChanged ? (
+        <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
+          未做任何變更。
+        </p>
       ) : (
         <div className="space-y-3">
           {changes.length > 0 && (
             <div className="surface rounded-xl p-4">
               <h3 className="mb-3 font-medium">欄位變更</h3>
-              <table className="w-full text-sm">
-                <thead><tr className="text-left text-slate-500"><th className="pb-2 pr-4">欄位</th><th className="pb-2 pr-4">原值</th><th className="pb-2">新值</th></tr></thead>
-                <tbody>
-                  {changes.map((c, i) => (
-                    <tr key={i} className="border-t border-slate-200 dark:border-slate-700">
-                      <td className="py-2 pr-4 font-medium">{c.label}</td>
-                      <td className="py-2 pr-4 text-slate-500 line-through">{c.before}</td>
-                      <td className="py-2 font-medium text-accent">{c.after}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <ul className="space-y-2 text-sm">
+                {changes.map((change) => (
+                  <li key={change.label} className="grid gap-0.5">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {change.label}
+                    </span>
+                    <span className="break-words [overflow-wrap:anywhere]">
+                      <span className="text-slate-500 line-through">{change.before}</span>
+                      <span aria-hidden="true"> → </span>
+                      <span className="font-medium text-accent dark:text-teal-400">
+                        {change.after}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           <div className="surface rounded-xl p-4">
             <dl className="grid grid-cols-2 gap-3 text-sm">
               <InfoItem label="照片" value={`${photoCount} 張`} />
               <InfoItem label="文件" value={`${docCount} 份`} />
+              <InfoItem label="本次新增檔案" value={`${addedCount} 個`} />
+              <InfoItem label="本次移除檔案" value={`${removedCount} 個`} />
             </dl>
           </div>
         </div>
@@ -1021,15 +1298,40 @@ function ReviewStep({
 }
 
 function EditField({
-  label, value, onChange, type = 'text', inputMode, min, max, step, maxLength,
+  label,
+  value,
+  onChange,
+  type = 'text',
+  inputMode,
+  min,
+  max,
+  step,
+  maxLength,
 }: {
-  label: string; value: string; onChange: (v: string) => void;
-  type?: string; inputMode?: 'decimal' | 'numeric'; min?: string; max?: string; step?: string; maxLength?: number;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+  inputMode?: 'decimal' | 'numeric';
+  min?: string;
+  max?: string;
+  step?: string;
+  maxLength?: number;
 }) {
   return (
     <label className="block space-y-1 text-sm">
       <span className="font-medium">{label}</span>
-      <input className="w-full rounded-lg border px-2 py-1.5" type={type} inputMode={inputMode} min={min} max={max} step={step} maxLength={maxLength} value={value} onChange={(e) => onChange(e.target.value)} />
+      <input
+        className="w-full rounded-lg border px-2 py-1.5"
+        type={type}
+        inputMode={inputMode}
+        min={min}
+        max={max}
+        step={step}
+        maxLength={maxLength}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
     </label>
   );
 }
@@ -1041,6 +1343,117 @@ function InfoItem({ label, value }: { label: string; value: string }) {
       <dd className="break-words font-medium [overflow-wrap:anywhere]">{value}</dd>
     </div>
   );
+}
+
+function toExistingPhotos(data: AssetAttachment[] | undefined): ExistingPhoto[] {
+  return (data ?? [])
+    .filter((item) => item.mediaClass === 'ASSET_PHOTO' && item.status !== 'FAILED')
+    .map((item) => ({
+      id: item.id,
+      version: item.version,
+      kind: item.kind,
+      description: item.description ?? '',
+      isCover: item.isCover,
+      filename: item.filename,
+      mime: item.mime,
+      variant: previewVariant(item, ['CROPPED', 'THUMBNAIL', 'ORIGINAL']),
+    }));
+}
+
+function toExistingDocuments(data: AssetAttachment[] | undefined): ExistingDocument[] {
+  return (data ?? [])
+    .filter((item) => item.mediaClass === 'DOCUMENT' && item.status !== 'FAILED')
+    .map((item) => ({
+      id: item.id,
+      version: item.version,
+      kind: item.kind,
+      description: item.description ?? '',
+      isCover: false,
+      filename: item.filename,
+      mime: item.mime,
+      sizeBytes: item.sizeBytes,
+      purchaseScoped: isPurchaseScoped(item),
+      variant: previewVariant(item, ['SCAN_COLOR', 'CROPPED', 'THUMBNAIL', 'ORIGINAL']),
+    }));
+}
+
+/** Uploads one picked file, its derivative if any, then confirms the review. */
+async function uploadAssetMedia(
+  assetId: string,
+  media: NewMedia,
+  mediaClass: 'ASSET_PHOTO' | 'DOCUMENT',
+): Promise<void> {
+  const isPhoto = mediaClass === 'ASSET_PHOTO';
+  const processingMode = isPhoto
+    ? 'OBJECT_CROP'
+    : media.mime === 'application/pdf'
+      ? 'NONE'
+      : 'DOCUMENT_SCAN';
+
+  const params = new URLSearchParams({
+    clientMediaId: media.id,
+    kind: media.kind || (isPhoto ? 'asset' : 'document'),
+    mediaClass,
+    captureSource: media.source,
+    processingMode,
+  });
+  if (media.description.trim()) params.set('description', media.description.trim());
+  if (isPhoto && media.isCover) params.set('isCover', 'true');
+
+  const attachment = await api.upload<AssetAttachment>(
+    `/assets/${encodeURIComponent(assetId)}/attachments/upload?${params.toString()}`,
+    media.originalFile,
+    {
+      'Content-Type': media.mime,
+      'X-Filename': encodeUploadFilename(media.filename),
+      'Idempotency-Key': `${assetId}-${media.id}-upload`,
+    },
+  );
+
+  const processingMetadata: Record<string, unknown> = {
+    clientMediaId: media.id,
+    originalFilename: media.filename,
+    sourceWidth: media.width,
+    sourceHeight: media.height,
+    transformVersion: 1,
+  };
+
+  let version = attachment.version;
+  if (isPhoto && media.crop && media.mime.startsWith('image/')) {
+    processingMetadata.crop = media.crop;
+    const cropped = await renderCroppedPhoto(media.originalFile, media.crop);
+    const variant = await api.upload<UploadedVariant>(
+      `/attachments/${encodeURIComponent(attachment.id)}/variants/upload?kind=CROPPED`,
+      cropped,
+      { 'Content-Type': cropped.type },
+    );
+    version = variant.attachmentVersion;
+  } else if (!isPhoto && media.corners && media.mime.startsWith('image/')) {
+    processingMetadata.corners = [
+      media.corners.topLeft,
+      media.corners.topRight,
+      media.corners.bottomRight,
+      media.corners.bottomLeft,
+    ];
+    const scan = await renderDocumentScan(media.originalFile, media.corners);
+    const variant = await api.upload<UploadedVariant>(
+      `/attachments/${encodeURIComponent(attachment.id)}/variants/upload?kind=SCAN_COLOR`,
+      scan,
+      { 'Content-Type': scan.type },
+    );
+    version = variant.attachmentVersion;
+  }
+
+  await api.patch(`/attachments/${encodeURIComponent(attachment.id)}/review`, {
+    version,
+    kind: media.kind || (isPhoto ? 'asset' : 'document'),
+    mediaClass,
+    processingMode,
+    processingMetadata,
+    userConfirmed: true,
+    description: media.description.trim() || null,
+    ...(isPhoto ? { isCover: media.isCover } : {}),
+  });
 }
 
 function encodeUploadFilename(filename: string): string {

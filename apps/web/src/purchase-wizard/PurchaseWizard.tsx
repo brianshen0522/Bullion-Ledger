@@ -272,8 +272,12 @@ export function PurchaseWizard({
             第 {currentIndex + 1}／{PURCHASE_WIZARD_STEPS.length} 步：
             {PURCHASE_WIZARD_STEPS[currentIndex]?.label}
           </p>
-          <nav className="max-w-full overflow-x-auto pb-1" aria-label="入庫步驟">
-            <ol className="grid min-w-[34rem] grid-cols-6 gap-1">
+          {/*
+            Two rows of three on a phone rather than one 34rem row that has to
+            be scrolled sideways to see the steps still ahead.
+          */}
+          <nav className="max-w-full" aria-label="入庫步驟">
+            <ol className="grid grid-cols-3 gap-1 sm:grid-cols-6">
               {PURCHASE_WIZARD_STEPS.map((step, index) => {
                 const reached = index <= furthestIndex;
                 return (
@@ -283,7 +287,7 @@ export function PurchaseWizard({
                       aria-current={draft.currentStep === step.id ? 'step' : undefined}
                       aria-disabled={!reached}
                       disabled={!reached}
-                      className={`min-h-11 w-full rounded-lg px-2 py-2 text-xs font-medium motion-safe:transition-colors ${
+                      className={`min-h-11 w-full rounded-lg px-1 py-2 text-xs font-medium motion-safe:transition-colors ${
                         draft.currentStep === step.id
                           ? 'bg-accent text-white shadow-sm'
                           : reached
@@ -367,7 +371,7 @@ export function PurchaseWizard({
           </p>
         )}
 
-        <footer className="sticky bottom-0 z-20 -mx-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:mx-0 sm:rounded-xl sm:border">
+        <footer className="sticky-action-bar -mx-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-4 pt-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:mx-0 sm:rounded-xl sm:border">
           <button
             type="button"
             disabled={currentIndex === 0 || finalizing}

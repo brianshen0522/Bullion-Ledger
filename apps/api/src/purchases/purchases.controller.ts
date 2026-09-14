@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Headers, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Patch, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 
 import { PurchasesService } from './purchases.service.js';
 import { PurchaseDto } from './dto/purchase.dto.js';
+import { UpdatePurchaseDto } from './dto/update-purchase.dto.js';
 import { CurrentUser, AuthContext } from '../common/decorators/current-user.decorator.js';
 
 @Controller('purchases')
@@ -17,6 +18,21 @@ export class PurchasesController {
   @Get(':id')
   get(@Param('id') id: string) {
     return this.purchases.get(id);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdatePurchaseDto,
+    @CurrentUser() user: AuthContext | null,
+    @Req() req: Request,
+  ) {
+    return this.purchases.update(id, dto, {
+      userId: user?.userId,
+      sessionId: user?.sessionId,
+      ip: req.ip || undefined,
+      userAgent: req.headers['user-agent'],
+    });
   }
 
   @Post()

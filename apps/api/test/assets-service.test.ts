@@ -19,6 +19,11 @@ function assetRecord(
     } | null;
     product: { name: string } | null;
     purchase: { purchasedAt: Date; dealerName: string | null } | null;
+    nameOverride: string | null;
+    formOverride: string | null;
+    brandOverride: string | null;
+    countryOverride: string | null;
+    yearOrVersionOverride: string | null;
     attachments: Array<{
       id: string;
       kind: string;
@@ -48,6 +53,11 @@ function assetRecord(
     status: 'HELD',
     serial: 'SERIAL-001',
     storageLocation: 'Home safe',
+    nameOverride: null,
+    formOverride: null,
+    brandOverride: null,
+    countryOverride: null,
+    yearOrVersionOverride: null,
     acquiredAt: new Date('2026-07-01T03:04:05.000Z'),
     createdAt: new Date('2026-07-02T03:04:05.000Z'),
     updatedAt: new Date('2026-07-03T03:04:05.000Z'),
@@ -62,8 +72,14 @@ function assetRecord(
       hasCertificate: true,
     },
     purchase: {
+      id: 'purchase-1',
       purchasedAt: new Date('2026-07-01T03:04:05.000Z'),
       dealerName: 'Trusted dealer',
+      branch: null,
+      orderNumber: null,
+      invoiceNumber: null,
+      paymentMethod: null,
+      notes: null,
     },
     attachments: [],
     ...overrides,
@@ -97,6 +113,14 @@ describe('AssetsService', () => {
         brand: null,
         country: null,
         yearOrVersion: null,
+        inherited: {
+          name: 'Mutable catalog name',
+          form: null,
+          brand: null,
+          country: null,
+          yearOrVersion: null,
+        },
+        overriddenFields: [],
         metal: { code: 'XAU', name: 'Gold' },
         quantity: 2,
         unitWeightGrams: '10.061728394',
@@ -114,10 +138,17 @@ describe('AssetsService', () => {
         updatedAt: '2026-07-03T03:04:05.000Z',
         acquiredAt: '2026-07-01T03:04:05.000Z',
         purchase: {
+          id: 'purchase-1',
           purchasedAt: '2026-07-01T03:04:05.000Z',
           dealerName: 'Trusted dealer',
+          branch: null,
+          orderNumber: null,
+          invoiceNumber: null,
+          paymentMethod: null,
+          notes: null,
         },
         coverPhoto: null,
+        photos: [],
       },
     ]);
   });
@@ -331,6 +362,11 @@ describe('AssetsService update', () => {
     acquiredAt: new Date('2026-07-01T00:00:00.000Z'),
     createdAt: new Date('2026-07-02T00:00:00.000Z'),
     updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+    nameOverride: null,
+    formOverride: null,
+    brandOverride: null,
+    countryOverride: null,
+    yearOrVersionOverride: null,
     metal: { code: 'XAU', name: 'Gold' },
     product: { name: 'Gold bar', form: 'bar', brand: null, country: null, yearOrVersion: null },
     purchaseItem: {
@@ -343,9 +379,90 @@ describe('AssetsService update', () => {
       packagingState: 'sealed',
       hasCertificate: true,
     },
-    purchase: { purchasedAt: new Date('2026-07-01T00:00:00.000Z'), dealerName: 'Dealer' },
+    purchase: {
+      id: 'purchase-1',
+      purchasedAt: new Date('2026-07-01T00:00:00.000Z'),
+      dealerName: 'Dealer',
+      branch: null,
+      orderNumber: null,
+      invoiceNumber: null,
+      paymentMethod: null,
+      notes: null,
+    },
     attachments: [],
   };
+
+  it('stores a descriptive edit as a per-lot override, leaving catalog and snapshot alone', async () => {
+    const { service, tx } = makeServiceWithTx();
+    const purchaseItem = { update: vi.fn() };
+    tx.purchaseItem = purchaseItem;
+    tx.asset.updateMany.mockResolvedValue({ count: 1 });
+    tx.asset.findUnique
+      .mockResolvedValueOnce(BASE_ASSET)
+      .mockResolvedValueOnce({ ...BASE_ASSET, nameOverride: 'My 2019 bar', version: 2 });
+
+    const result = await service.update(
+      'asset-1',
+      { version: 1, name: 'My 2019 bar' },
+      { userId: 'user-1' },
+    );
+
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ nameOverride: 'My 2019 bar' }) }),
+    );
+    // The catalog-linked lot used to write this to PurchaseItem, where the
+    // presenter never read it back.
+    expect(purchaseItem.update).not.toHaveBeenCalled();
+    expect(result.name).toBe('My 2019 bar');
+    expect(result.overriddenFields).toEqual(['name']);
+    expect(result.inherited.name).toBe('Gold bar');
+  });
+
+  it('clears the override when the submitted value matches the inherited one', async () => {
+    const { service, tx } = makeServiceWithTx();
+    const overridden = { ...BASE_ASSET, nameOverride: 'My 2019 bar' };
+    tx.asset.updateMany.mockResolvedValue({ count: 1 });
+    tx.asset.findUnique
+      .mockResolvedValueOnce(overridden)
+      .mockResolvedValueOnce({ ...BASE_ASSET, version: 2 });
+
+    const result = await service.update(
+      'asset-1',
+      { version: 1, name: 'Gold bar' },
+      { userId: 'user-1' },
+    );
+
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ nameOverride: null }) }),
+    );
+    expect(result.overriddenFields).toEqual([]);
+  });
+
+  it('overrides the form of one lot without touching the linked product definition', async () => {
+    const { service, tx } = makeServiceWithTx();
+    tx.asset.updateMany.mockResolvedValue({ count: 1 });
+    tx.asset.findUnique
+      .mockResolvedValueOnce(BASE_ASSET)
+      .mockResolvedValueOnce({ ...BASE_ASSET, formOverride: 'coin', version: 2 });
+
+    const result = await service.update('asset-1', { version: 1, form: 'coin' }, {});
+
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ formOverride: 'coin' }) }),
+    );
+    expect(result.form).toBe('coin');
+    expect(result.inherited.form).toBe('bar');
+  });
+
+  it('rejects an edit that changes nothing, including a form equal to the inherited one', async () => {
+    const { service, tx } = makeServiceWithTx();
+    tx.asset.findUnique.mockResolvedValue(BASE_ASSET);
+
+    await expect(service.update('asset-1', { version: 1, form: 'bar' }, {})).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+  });
 
   it('updates quantity-only: derives unit weight from old gross/old quantity, no drift', async () => {
     const { service, tx } = makeServiceWithTx();

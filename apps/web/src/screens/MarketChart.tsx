@@ -116,9 +116,10 @@ export function MarketChart({
 
       if (!nearest || nearest.distance > CLICK_TOLERANCE_PX) return;
       selectRef.current(nearest.marker.purchaseId);
-      document
-        .getElementById(`purchase-row-${nearest.marker.purchaseId}`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      visibleTransactionEntry(nearest.marker.purchaseId)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
     };
     zr.on('click', onClick);
 
@@ -364,4 +365,17 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/**
+ * The transaction list renders as cards on a phone and as a table on desktop,
+ * and both are in the DOM at once. scrollIntoView does nothing on the hidden
+ * one, so pick whichever layout is actually laid out.
+ */
+function visibleTransactionEntry(purchaseId: string): HTMLElement | null {
+  const candidates = [
+    document.getElementById(`purchase-card-${purchaseId}`),
+    document.getElementById(`purchase-row-${purchaseId}`),
+  ];
+  return candidates.find((element) => element !== null && element.offsetParent !== null) ?? null;
 }

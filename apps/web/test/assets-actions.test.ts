@@ -17,6 +17,12 @@ const rowActionsSource = readFileSync(
   fileURLToPath(new URL('../src/RowActionsMenu.tsx', import.meta.url)),
   'utf8',
 );
+// Editing moved out of Assets.tsx into the holding editor, so the guards about
+// the edit form follow it there.
+const editorSource = readFileSync(
+  fileURLToPath(new URL('../src/screens/AssetEditWizard.tsx', import.meta.url)),
+  'utf8',
+);
 
 // The brace prefix disambiguates the two guards: searching for
 // `isDesktop && (` alone also matches inside `!isDesktop && (`.
@@ -67,18 +73,20 @@ describe('inventory actions reach both layouts', () => {
 
   it('locks every row action while an edit is active', () => {
     expect(source).toContain('const actionsDisabled = Boolean(isPending || editingId || disposal)');
-    expect(source).toContain('<fieldset disabled={isPending || isConflict}>');
+    expect(editorSource).toContain('<fieldset disabled={saving}');
   });
 
   it('shows edit context, constrains text fields, and moves focus to the form', () => {
-    expect(source).toContain('{asset.name} · 成本幣別 {asset.currency}');
-    expect(source).toContain('label={`分攤成本 (${asset.currency})`}');
-    expect(source.match(/maxLength=\{128\}/g)).toHaveLength(2);
-    expect(source).toContain('form.serial.trim().length > 128');
-    expect(source).toContain('form.storageLocation.trim().length > 128');
-    expect(source).toContain("querySelector<HTMLInputElement>('input:not(:disabled)')?.focus");
-    expect(source).toContain('formElement.scrollIntoView');
-    expect(source).toContain('aria-invalid={invalid || undefined}');
+    expect(editorSource).toContain(
+      '<h1 className="text-2xl font-semibold tracking-tight">{asset.name}</h1>',
+    );
+    expect(editorSource).toContain('label={`分攤成本 (${currency})`}');
+    // Serial and storage location both match the API's 128-character bound.
+    expect(editorSource.match(/maxLength=\{128\}/g)).toHaveLength(2);
+    expect(editorSource).toContain(
+      "querySelector<HTMLInputElement>('input:not(:disabled)')?.focus",
+    );
+    expect(editorSource).toContain('formElement.scrollIntoView');
   });
 
   it('uses the whole failed thumbnail as an accessible retry target', () => {

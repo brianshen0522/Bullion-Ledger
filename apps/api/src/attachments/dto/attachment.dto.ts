@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsBooleanString,
   IsEnum,
+  IsIn,
   IsInt,
   IsObject,
   IsOptional,
@@ -132,6 +133,11 @@ export class AttachmentReadUrlQueryDto {
   @Min(1)
   @Max(10_000)
   revision?: number;
+
+  /** Omitted keeps the per-media-class default; 'inline' is for previewing. */
+  @IsOptional()
+  @IsIn(['inline', 'attachment'])
+  disposition?: 'inline' | 'attachment';
 }
 
 export class UploadAttachmentVariantQueryDto {

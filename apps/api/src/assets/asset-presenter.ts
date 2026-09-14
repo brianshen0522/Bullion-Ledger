@@ -25,7 +25,18 @@ export const HELD_ASSET_INCLUDE = {
       hasCertificate: true,
     },
   },
-  purchase: { select: { purchasedAt: true, dealerName: true } },
+  purchase: {
+    select: {
+      id: true,
+      purchasedAt: true,
+      dealerName: true,
+      branch: true,
+      orderNumber: true,
+      invoiceNumber: true,
+      paymentMethod: true,
+      notes: true,
+    },
+  },
   attachments: {
     where: {
       deletedAt: null,
@@ -60,15 +71,22 @@ export const HELD_ASSET_INCLUDE = {
 type HeldAssetRecord = Prisma.AssetGetPayload<{ include: typeof HELD_ASSET_INCLUDE }>;
 
 /**
- * Held-inventory contract. For assets that reference a ProductDefinition, the
- * descriptive fields (name, form, brand, country, yearOrVersion) read from the
- * current definition so edits to the catalog are reflected in inventory.
- * Assets without a product fall back to their PurchaseItem snapshot.
- * Physical and financial fields always come from the Asset row.
+ * Held-inventory contract. Descriptive fields (name, form, brand, country,
+ * yearOrVersion) resolve in three steps: this lot's own override wins, then a
+ * linked ProductDefinition so catalog edits reach inventory, then the
+ * PurchaseItem snapshot taken at buy time. Clearing an override restores
+ * inheritance. Physical and financial fields always come from the Asset row.
  */
 export function presentHeldAsset(asset: HeldAssetRecord) {
   const hasProduct = Boolean(asset.productDefinitionId && asset.product);
   const description = hasProduct ? asset.product : asset.purchaseItem;
+  const inherited = {
+    name: description?.name ?? null,
+    form: description?.form ?? null,
+    brand: description?.brand ?? null,
+    country: description?.country ?? null,
+    yearOrVersion: description?.yearOrVersion ?? null,
+  };
   const unitWeightFromAsset =
     asset.quantity > 0 ? asset.grossWeightGrams.dividedBy(asset.quantity) : new Decimal(0);
   const coverPhoto = presentCoverPhoto(asset.attachments);
@@ -76,11 +94,17 @@ export function presentHeldAsset(asset: HeldAssetRecord) {
   return {
     id: asset.id,
     productDefinitionId: asset.productDefinitionId,
-    name: description?.name ?? '未命名資產',
-    form: description?.form ?? 'other',
-    brand: description?.brand ?? null,
-    country: description?.country ?? null,
-    yearOrVersion: description?.yearOrVersion ?? null,
+    name: asset.nameOverride ?? inherited.name ?? '未命名資產',
+    form: asset.formOverride ?? inherited.form ?? 'other',
+    brand: asset.brandOverride ?? inherited.brand,
+    country: asset.countryOverride ?? inherited.country,
+    yearOrVersion: asset.yearOrVersionOverride ?? inherited.yearOrVersion,
+    // What each descriptive field would read if its override were cleared, so
+    // the edit screen can offer "restore" without a second request.
+    inherited,
+    overriddenFields: OVERRIDABLE_FIELDS.filter(
+      (field) => asset[`${field}Override` as const] !== null,
+    ),
     metal: asset.metal,
     quantity: asset.quantity,
     // Prisma's Decimal runtime is not guaranteed to share object identity
@@ -100,8 +124,14 @@ export function presentHeldAsset(asset: HeldAssetRecord) {
     acquiredAt: asset.acquiredAt.toISOString(),
     purchase: asset.purchase
       ? {
+          id: asset.purchase.id,
           purchasedAt: asset.purchase.purchasedAt.toISOString(),
           dealerName: asset.purchase.dealerName,
+          branch: asset.purchase.branch,
+          orderNumber: asset.purchase.orderNumber,
+          invoiceNumber: asset.purchase.invoiceNumber,
+          paymentMethod: asset.purchase.paymentMethod,
+          notes: asset.purchase.notes,
         }
       : null,
     coverPhoto,
@@ -119,10 +149,21 @@ export function presentHeldAsset(asset: HeldAssetRecord) {
   };
 }
 
+/** Descriptive fields a single holding may override. */
+export const OVERRIDABLE_FIELDS = ['name', 'form', 'brand', 'country', 'yearOrVersion'] as const;
+
+export type OverridableField = (typeof OVERRIDABLE_FIELDS)[number];
+
 const PHOTO_VARIANT_PRIORITY = ['THUMBNAIL', 'CROPPED', 'ORIGINAL'] as const;
 
 function bestVariant(
-  variants: { kind: string; revision: number; mime: string; width: number | null; height: number | null }[],
+  variants: {
+    kind: string;
+    revision: number;
+    mime: string;
+    width: number | null;
+    height: number | null;
+  }[],
 ) {
   for (const kind of PHOTO_VARIANT_PRIORITY) {
     const variant = variants.find((v) => v.kind === kind);

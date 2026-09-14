@@ -10,9 +10,7 @@ export class DealersService {
     const rows = await this.prisma.purchase.findMany({
       where: {
         dealerName: { not: null },
-        ...(q
-          ? { dealerName: { contains: q, mode: 'insensitive' as const } }
-          : {}),
+        ...(q ? { dealerName: { contains: q, mode: 'insensitive' as const } } : {}),
       },
       select: { dealerName: true, branch: true },
       distinct: ['dealerName', 'branch'],

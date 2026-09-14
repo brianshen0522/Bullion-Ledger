@@ -226,9 +226,25 @@ export type HeldAssetListItem = {
   hasCertificate: boolean;
   version: number;
   updatedAt: string;
+  /** What each descriptive field reads with no per-lot override applied. */
+  inherited: {
+    name: string | null;
+    form: string | null;
+    brand: string | null;
+    country: string | null;
+    yearOrVersion: string | null;
+  };
+  /** Descriptive fields this lot currently overrides. */
+  overriddenFields: ('name' | 'form' | 'brand' | 'country' | 'yearOrVersion')[];
   purchase: {
+    id: string;
     purchasedAt: string;
     dealerName: string | null;
+    branch: string | null;
+    orderNumber: string | null;
+    invoiceNumber: string | null;
+    paymentMethod: string | null;
+    notes: string | null;
   } | null;
   coverPhoto: {
     attachmentId: string;
@@ -266,6 +282,9 @@ export type OrganizationListItem = {
 export type AssetAttachment = {
   id: string;
   version: number;
+  /** Set when the file belongs to the purchase rather than this one holding. */
+  purchaseId: string | null;
+  assetId: string | null;
   kind: string;
   mediaClass: 'ASSET_PHOTO' | 'DOCUMENT';
   captureSource: 'CAMERA' | 'LIBRARY';
@@ -283,7 +302,14 @@ export type AssetAttachment = {
   userConfirmed: boolean;
   isCover: boolean;
   isSensitive: boolean;
-  variants: { kind: string; revision: number; mime: string; sizeBytes: number; width: number | null; height: number | null }[];
+  variants: {
+    kind: string;
+    revision: number;
+    mime: string;
+    sizeBytes: number;
+    width: number | null;
+    height: number | null;
+  }[];
 };
 
 export type PurchaseListItem = {

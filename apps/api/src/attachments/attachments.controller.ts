@@ -91,10 +91,7 @@ export class AttachmentsController {
   }
 
   @Get('assets/:assetId/attachments')
-  listAssetAttachments(
-    @Param('assetId') assetId: string,
-    @CurrentUser() user: AuthContext | null,
-  ) {
+  listAssetAttachments(@Param('assetId') assetId: string, @CurrentUser() user: AuthContext | null) {
     return this.attachments.listForAsset(requireUser(user).userId, assetId);
   }
 
@@ -155,6 +152,7 @@ export class AttachmentsController {
       id,
       query.variant,
       query.revision,
+      query.disposition,
     );
   }
 }

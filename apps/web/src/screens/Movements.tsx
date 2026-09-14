@@ -85,8 +85,71 @@ export function MovementsScreen() {
             {filter === 'ALL' ? '尚無任何異動紀錄。' : '這個類型還沒有紀錄。'}
           </p>
         )}
+        {/*
+          Seven columns cannot be read on a phone; the table used to scroll
+          sideways, hiding the amount and realized-gain columns off-screen.
+        */}
         {rows.length > 0 && (
-          <div className="overflow-x-auto">
+          <ol className="space-y-3 lg:hidden">
+            {rows.map((movement) => {
+              const amount = movementAmount(movement);
+              const realized = realizedOf(movement);
+              return (
+                <li
+                  key={movement.id}
+                  className="rounded-xl border border-slate-200 p-3 dark:border-slate-700"
+                >
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="break-words font-medium [overflow-wrap:anywhere]">
+                      {movement.name}
+                      <span className="ml-1 text-xs text-slate-500">{movement.metalCode}</span>
+                    </span>
+                    <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium dark:bg-slate-800">
+                      {movementLabel(movement.type)}
+                    </span>
+                  </div>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                    <MovementFact
+                      label="日期"
+                      value={new Date(movement.occurredAt).toLocaleDateString()}
+                    />
+                    <MovementFact
+                      label="數量／純重"
+                      value={
+                        movement.quantity > 0
+                          ? `${movement.quantity} 件 · ${trim(movement.fineWeightGrams)} g`
+                          : '—'
+                      }
+                    />
+                    <MovementFact label="對象" value={movement.counterparty ?? '—'} />
+                    <MovementFact
+                      label="金額"
+                      value={
+                        amount.value === null
+                          ? movement.toStorageLocation
+                            ? `→ ${movement.toStorageLocation}`
+                            : '—'
+                          : `${amount.label} ${formatMoney(amount.value, movement.currency ?? '')}`
+                      }
+                    />
+                    <MovementFact
+                      label="已實現損益"
+                      value={
+                        realized === null
+                          ? '不適用'
+                          : formatMoney(realized.toFixed(2), movement.currency ?? '')
+                      }
+                      tone={realized === null ? undefined : realized.isNegative() ? 'loss' : 'gain'}
+                      wide
+                    />
+                  </dl>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+        {rows.length > 0 && (
+          <div className="hidden overflow-x-auto lg:block">
             <table className="w-full min-w-[46rem] text-sm">
               <thead className="text-left text-slate-500 dark:text-slate-400">
                 <tr>
@@ -155,6 +218,33 @@ export function MovementsScreen() {
           贈與不計入已實現損益 — 把金屬送給別人不是虧損，因此只記錄當時市值。
         </p>
       </section>
+    </div>
+  );
+}
+
+function MovementFact({
+  label,
+  value,
+  tone,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  tone?: 'gain' | 'loss';
+  wide?: boolean;
+}) {
+  const toneClass =
+    tone === 'loss'
+      ? 'text-red-700 dark:text-red-400'
+      : tone === 'gain'
+        ? 'text-teal-700 dark:text-teal-400'
+        : '';
+  return (
+    <div className={wide ? 'col-span-2 min-w-0' : 'min-w-0'}>
+      <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+      <dd className={`break-words font-medium tabular-nums [overflow-wrap:anywhere] ${toneClass}`}>
+        {value}
+      </dd>
     </div>
   );
 }

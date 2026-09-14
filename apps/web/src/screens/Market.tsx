@@ -283,7 +283,60 @@ function TransactionTable({
       <h2 id="market-transactions" className="mb-3 font-medium">
         歷史交易
       </h2>
-      <div className="overflow-x-auto">
+      {/*
+        A seven-column table only fits a desktop. On a phone the same rows are
+        cards, so the premium rate is readable without scrolling sideways.
+      */}
+      <ol className="space-y-3 lg:hidden">
+        {markers.map((marker) => {
+          const selected = marker.purchaseId === selectedPurchaseId;
+          return (
+            <li key={marker.purchaseId}>
+              <button
+                type="button"
+                id={`purchase-card-${marker.purchaseId}`}
+                aria-pressed={selected}
+                onClick={() => onSelect(selected ? null : marker.purchaseId)}
+                className={`w-full min-w-0 rounded-xl border p-3 text-left ${
+                  selected
+                    ? 'border-accent bg-teal-50 dark:bg-teal-950'
+                    : 'border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="break-words font-medium [overflow-wrap:anywhere]">
+                    {marker.names.join('、')}
+                  </span>
+                  <span className="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+                    {new Date(marker.purchasedAt).toLocaleDateString()}
+                  </span>
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <MarketFact label="重量" value={formatWeight(marker.fineWeightGrams, unit)} />
+                  <MarketFact
+                    label="購買總價"
+                    value={formatMoney(marker.totalCost, marker.currency)}
+                  />
+                  <MarketFact
+                    label={`每 ${WEIGHT_UNIT_LABELS[unit]} 成本`}
+                    value={formatUnitPrice(marker.costPerGram, marker.currency, unit)}
+                  />
+                  <MarketFact
+                    label="當時現貨"
+                    value={
+                      marker.spotPricePerGram === null
+                        ? '尚無行情'
+                        : formatUnitPrice(marker.spotPricePerGram, marker.currency, unit)
+                    }
+                  />
+                  <MarketFact label="溢價率" value={formatPremiumRate(marker.premiumRate)} wide />
+                </dl>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      <div className="hidden overflow-x-auto lg:block">
         <table className="w-full min-w-[44rem] text-sm">
           <thead className="text-left text-slate-500 dark:text-slate-400">
             <tr>
@@ -355,6 +408,23 @@ function TransactionTable({
         {fxRate ? ` 換算匯率 ${fxRate}` : ''}）。點擊一列可在上方圖表標出該筆買點。
       </p>
     </section>
+  );
+}
+
+function MarketFact({
+  label,
+  value,
+  wide = false,
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+}) {
+  return (
+    <div className={wide ? 'col-span-2 min-w-0' : 'min-w-0'}>
+      <dt className="text-xs text-slate-500 dark:text-slate-400">{label}</dt>
+      <dd className="break-words font-medium tabular-nums [overflow-wrap:anywhere]">{value}</dd>
+    </div>
   );
 }
 

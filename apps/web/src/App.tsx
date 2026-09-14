@@ -16,6 +16,13 @@ import { SettingsScreen } from './screens/Settings.js';
 import { LoginScreen } from './screens/Login.js';
 import { InitScreen } from './screens/Init.js';
 import { createBrowserScreenHistory, type Screen } from './screen-navigation.js';
+import {
+  NAV_ENTRIES,
+  isOverflowActive,
+  navLabel,
+  overflowMobileEntries,
+  primaryMobileEntries,
+} from './nav-model.js';
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -175,28 +182,23 @@ function Shell({
   online: boolean;
   onLoggedOut: () => void;
 }) {
-  const nav: { key: Screen; label: string }[] = [
-    { key: 'dashboard', label: '總覽' },
-    { key: 'market', label: '市場與買點' },
-    { key: 'inventory', label: '持有庫存' },
-    { key: 'products', label: '商品規格' },
-    { key: 'purchase', label: '新增入庫' },
-    { key: 'movements', label: '異動紀錄' },
-    { key: 'settings', label: '設定' },
-  ];
+  const [overflowOpen, setOverflowOpen] = useState(false);
+
+  // Close the sheet on navigation, and whenever the phone bar is no longer the
+  // nav in use, so it can never be left open behind the desktop bar.
+  useEffect(() => setOverflowOpen(false), [screen]);
 
   return (
     <div className="flex min-h-screen min-h-dvh min-w-0 flex-col">
-      <header className="safe-area-header flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white/95 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
-        <span className="mr-auto flex min-w-0 items-center gap-2 whitespace-nowrap font-semibold tracking-tight">
+      <header className="safe-area-header flex min-w-0 items-center gap-3 border-b border-slate-200 bg-white/95 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+        <span className="flex min-w-0 items-center gap-2 whitespace-nowrap font-semibold tracking-tight">
           <AppIcon className="h-8 w-8 shadow-sm" />
-          <span>Bullion Ledger</span>
+          <span className="truncate">Bullion Ledger</span>
         </span>
-        <nav
-          aria-label="Primary"
-          className="order-3 grid w-full min-w-0 grid-cols-2 gap-1 sm:order-none sm:flex sm:w-auto"
-        >
-          {nav.map((item) => (
+        {/* Phones get the bottom bar instead; putting seven destinations here
+            pushed every screen's own content a third of the way down. */}
+        <nav aria-label="Primary" className="ml-auto hidden min-w-0 gap-1 sm:flex">
+          {NAV_ENTRIES.map((item) => (
             <button
               type="button"
               key={item.key}
@@ -212,7 +214,7 @@ function Shell({
             </button>
           ))}
         </nav>
-        <div className="order-2 ml-auto flex min-w-0 items-center gap-2 sm:order-none">
+        <div className="ml-auto flex min-w-0 items-center gap-1 sm:ml-0 sm:gap-2">
           <button
             type="button"
             onClick={() => navigateScreen('settings')}
@@ -236,12 +238,119 @@ function Shell({
         </div>
       )}
       {screen === 'dashboard' && <PwaUpdateNotice />}
-      <main className="safe-area-main mx-auto w-full min-w-0 max-w-6xl flex-1 py-4 sm:py-6">
+      <main className="safe-area-main app-main mx-auto w-full min-w-0 max-w-6xl flex-1 py-4 sm:py-6">
         {children}
       </main>
+      <MobileNav
+        screen={screen}
+        navigateScreen={navigateScreen}
+        overflowOpen={overflowOpen}
+        onToggleOverflow={() => setOverflowOpen((open) => !open)}
+      />
     </div>
   );
 }
+
+/**
+ * Phone navigation. Four destinations sit in the thumb zone and the rest live
+ * behind one overflow button, so no screen starts below four rows of buttons.
+ */
+function MobileNav({
+  screen,
+  navigateScreen,
+  overflowOpen,
+  onToggleOverflow,
+}: {
+  screen: Screen;
+  navigateScreen: (screen: Screen) => void;
+  overflowOpen: boolean;
+  onToggleOverflow: () => void;
+}) {
+  const primary = primaryMobileEntries();
+  const overflow = overflowMobileEntries();
+  const overflowActive = isOverflowActive(screen);
+
+  return (
+    <div className="sm:hidden">
+      {overflowOpen && (
+        <>
+          <button
+            type="button"
+            aria-label="關閉選單"
+            className="fixed inset-0 z-30 h-full w-full cursor-default bg-slate-950/30"
+            onClick={onToggleOverflow}
+          />
+          <div
+            id="app-nav-overflow"
+            className="surface fixed inset-x-2 bottom-[calc(var(--app-bottom-nav)+0.5rem)] z-40 grid gap-1 rounded-2xl p-2 shadow-xl"
+          >
+            {overflow.map((item) => (
+              <button
+                type="button"
+                key={item.key}
+                onClick={() => navigateScreen(item.key)}
+                aria-current={screen === item.key ? 'page' : undefined}
+                className={`rounded-xl px-4 text-left font-medium ${
+                  screen === item.key ? 'bg-accent text-white' : 'interactive-muted'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 gap-1 border-t border-slate-200 bg-white/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/95"
+      >
+        {primary.map((item) => (
+          <button
+            type="button"
+            key={item.key}
+            onClick={() => navigateScreen(item.key)}
+            aria-current={screen === item.key ? 'page' : undefined}
+            className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-xs font-medium ${
+              screen === item.key
+                ? 'text-accent dark:text-teal-300'
+                : 'text-slate-500 dark:text-slate-400'
+            }`}
+          >
+            <span aria-hidden="true" className="text-base leading-none">
+              {NAV_GLYPHS[item.key]}
+            </span>
+            <span className="truncate">{item.shortLabel}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={onToggleOverflow}
+          aria-expanded={overflowOpen}
+          aria-controls="app-nav-overflow"
+          aria-current={overflowActive ? 'page' : undefined}
+          className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-xs font-medium ${
+            overflowActive ? 'text-accent dark:text-teal-300' : 'text-slate-500 dark:text-slate-400'
+          }`}
+        >
+          <span aria-hidden="true" className="text-base leading-none">
+            ☰
+          </span>
+          <span className="truncate">{overflowActive ? navLabel(screen) : '更多'}</span>
+        </button>
+      </nav>
+    </div>
+  );
+}
+
+const NAV_GLYPHS: Record<Screen, string> = {
+  dashboard: '◎',
+  market: '↗',
+  inventory: '▦',
+  products: '◈',
+  purchase: '＋',
+  movements: '⇄',
+  settings: '⚙',
+};
 
 function useOnlineStatus(): boolean {
   const [online, setOnline] = useState(() => navigator.onLine);
