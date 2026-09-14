@@ -156,17 +156,6 @@
   padding-left: calc(1rem + env(safe-area-inset-left));
 }
 
-/*
- * A wizard's Back / Next bar. It sticks above the phone tab bar rather than
- * under it, and the tab bar already clears the home indicator on phones.
- */
-.sticky-action-bar {
-  position: sticky;
-  bottom: calc(var(--app-bottom-nav) + env(safe-area-inset-bottom));
-  z-index: 20;
-  padding-bottom: 0.75rem;
-}
-
 .safe-area-screen {
   padding-top: calc(1rem + env(safe-area-inset-top));
   padding-right: calc(1rem + env(safe-area-inset-right));

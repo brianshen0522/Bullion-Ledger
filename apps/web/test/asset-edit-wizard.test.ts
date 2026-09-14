@@ -116,6 +116,14 @@ describe('holding editor', () => {
     expect(markup).toContain('商品規格：楓葉金幣');
   });
 
+  it('never tells the user the currency is fixed', () => {
+    // The transaction step used to list 幣別 under 不可修改, so anyone reading
+    // step one concluded the currency could not be corrected at all.
+    const markup = render('transaction');
+    expect(markup).not.toContain('不可修改');
+    expect(markup).toContain('成本與幣別');
+  });
+
   it('offers the currency on the cost step and says how far a change reaches', () => {
     const purchased = render('cost');
     expect(purchased).toContain('幣別');

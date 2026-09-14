@@ -59,27 +59,28 @@ describe('app shell layout', () => {
     );
   });
 
-  it('floats an in-page wizard action bar above the tab bar, not underneath it', () => {
-    expect(cssSource).toContain(
-      'bottom: calc(var(--app-bottom-nav) + env(safe-area-inset-bottom))',
-    );
-    const purchase = readFileSync(
-      fileURLToPath(new URL('../src/purchase-wizard/PurchaseWizard.tsx', import.meta.url)),
+  it('gives every full-screen wizard the same chrome, over the tab bar', () => {
+    // It covers the tab bar rather than sitting above it, and locks the body so
+    // the page behind cannot scroll out from under the panel being filled in.
+    const shell = readFileSync(
+      fileURLToPath(new URL('../src/WizardShell.tsx', import.meta.url)),
       'utf8',
     );
-    expect(purchase).toContain('sticky-action-bar');
-    expect(purchase).not.toContain('sticky bottom-0 z-20');
-  });
+    expect(shell).toContain('fixed inset-0 z-50 flex h-dvh flex-col');
+    expect(shell).toContain('min-h-0 flex-1 overflow-y-auto');
+    expect(shell).toContain("document.body.style.overflow = 'hidden'");
 
-  it('gives the holding editor its own full-screen chrome instead', () => {
-    // It covers the tab bar rather than sitting above it, so the page behind
-    // cannot scroll underneath the panel the user is filling in.
-    const editor = readFileSync(
-      fileURLToPath(new URL('../src/screens/AssetEditWizard.tsx', import.meta.url)),
-      'utf8',
-    );
-    expect(editor).toContain('fixed inset-0 z-50 flex h-dvh flex-col');
-    expect(editor).toContain('min-h-0 flex-1 overflow-y-auto');
-    expect(editor).not.toContain('sticky-action-bar');
+    // Both wizards use it, so neither can drift into its own chrome.
+    for (const file of ['screens/AssetEditWizard.tsx', 'purchase-wizard/PurchaseWizard.tsx']) {
+      const source = readFileSync(
+        fileURLToPath(new URL(`../src/${file}`, import.meta.url)),
+        'utf8',
+      );
+      expect(source).toContain('<WizardShell');
+      // A wizard that covers the tab bar needs no bar of its own to clear it.
+      expect(source).not.toContain('sticky-action-bar');
+      expect(source).not.toContain('sticky bottom-0 z-20');
+    }
+    expect(cssSource).not.toContain('.sticky-action-bar');
   });
 });

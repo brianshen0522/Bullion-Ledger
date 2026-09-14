@@ -241,3 +241,109 @@ export function productPartiesWithBrand(
 
   return parties;
 }
+
+/**
+ * One form behind both creating and editing a specification. Creating differs
+ * only in that the metal is still open: an existing specification's metal is
+ * what every holding built from it was priced against, so it never changes.
+ */
+export interface ProductWizardForm extends ProductEditForm {
+  metalCode: string;
+}
+
+export function newProductWizardForm(metalCode: string): ProductWizardForm {
+  return {
+    metalCode,
+    name: '',
+    form: 'bar',
+    brand: '',
+    country: '',
+    yearOrVersion: '',
+    purity: '0.9999',
+    unitWeight: '1',
+    weightUnit: 'g',
+    weightUnitDirty: false,
+    active: true,
+  };
+}
+
+export function productWizardFormFrom(product: ProductDefinition): ProductWizardForm {
+  return { ...emptyProductEditForm(product), metalCode: product.metal.code };
+}
+
+/**
+ * Validates only what the given step is responsible for, so a user is never
+ * stopped on step one by a value they have not reached yet. Returns null when
+ * the step is good.
+ */
+export function validateProductStep(
+  form: ProductWizardForm,
+  step: 'basics' | 'origin' | 'spec' | 'review',
+): string | null {
+  if (step === 'basics') {
+    if (!form.name.trim()) return '請輸入商品規格名稱。';
+    if (!form.metalCode) return '請選擇金屬。';
+    if (!form.form) return '請選擇商品形式。';
+    return null;
+  }
+  // Brand, country and year are all optional attributions (PRD §13).
+  if (step === 'origin') return null;
+  if (step === 'spec') {
+    // Deliberately not validateProductEditForm: that also checks the name,
+    // which belongs to step one. Faulting a step for a field the user has not
+    // reached is how a wizard traps someone with no way forward.
+    if (!PURITY_INPUT_RE.test(form.purity)) {
+      return '純度格式無效（最多7位小數，不允許科學記號）。';
+    }
+    try {
+      const purity = new Decimal(form.purity);
+      if (!purity.isFinite() || purity.lte(0) || purity.gt(1)) {
+        return '純度必須大於 0 且不超過 1。';
+      }
+    } catch {
+      return '請輸入有效的純度。';
+    }
+    if (!WEIGHT_INPUT_RE.test(form.unitWeight)) {
+      return '重量格式無效（最多9位小數，不允許科學記號）。';
+    }
+    try {
+      const weight = new Decimal(form.unitWeight);
+      if (!weight.isFinite() || weight.lte(0)) return '單件重量必須大於 0。';
+    } catch {
+      return '請輸入有效的單件重量。';
+    }
+    return null;
+  }
+  return (
+    validateProductStep(form, 'basics') ??
+    validateProductStep(form, 'origin') ??
+    validateProductStep(form, 'spec')
+  );
+}
+
+/** The POST body for a new specification. */
+export function buildProductCreateBody(
+  form: ProductWizardForm,
+  brandOrganizationId: string | null,
+): Record<string, unknown> {
+  return {
+    name: form.name.trim(),
+    metalCode: form.metalCode,
+    form: form.form,
+    parties: brandOrganizationId
+      ? [
+          {
+            organizationId: brandOrganizationId,
+            role: 'BRAND',
+            isPrimary: true,
+            attributionStatus: 'DECLARED',
+          },
+        ]
+      : undefined,
+    country: form.country.trim() || undefined,
+    yearOrVersion: form.yearOrVersion.trim() || undefined,
+    purity: form.purity,
+    unitWeight: form.unitWeight,
+    weightUnit: form.weightUnit,
+  };
+}

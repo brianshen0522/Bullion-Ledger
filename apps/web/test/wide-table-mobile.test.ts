@@ -55,12 +55,12 @@ describe('wizard step strips fit a phone', () => {
     expect(wizard).not.toContain('min-w-[34rem]');
   });
 
-  it('replaces the holding editor strip with a progress bar', () => {
-    // Eight steps will not fit as buttons on a phone at any wrap, so the
-    // editor names the current step and shows how far along it is.
+  it('replaces a full-screen wizard strip with a progress bar', () => {
+    // Eight steps will not fit as buttons on a phone at any wrap, so the shell
+    // names the current step and shows how far along it is.
     const editor = read('screens/AssetEditWizard.tsx');
     expect(editor).not.toContain('min-w-[34rem]');
-    expect(editor).toContain('role="progressbar"');
-    expect(editor).toContain('assetEditStepLabel(step)');
+    expect(editor).toContain('stepLabel={assetEditStepLabel(step)}');
+    expect(read('WizardShell.tsx')).toContain('role="progressbar"');
   });
 });

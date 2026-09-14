@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import type { AssetAttachment, HeldAssetListItem } from '../src/api.js';
@@ -290,5 +292,22 @@ describe('attachment preview helpers', () => {
   it('separates purchase-wide documents from per-holding ones', () => {
     expect(isPurchaseScoped({ purchaseId: 'purchase-1' } as AssetAttachment)).toBe(true);
     expect(isPurchaseScoped({ purchaseId: null } as AssetAttachment)).toBe(false);
+  });
+});
+
+describe('review diff covers the currency', () => {
+  /**
+   * The editor's review panel lists a change per field. A currency-only edit
+   * that is missing from that list reads as "未做任何變更", which is
+   * indistinguishable from the edit having been refused.
+   */
+  it('names 幣別 among the fields the review step compares', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../src/screens/AssetEditWizard.tsx', import.meta.url)),
+      'utf8',
+    );
+    const review = source.slice(source.indexOf('function ReviewStep('));
+    expect(review).toContain("push('幣別'");
+    expect(review).toContain('form.currency');
   });
 });

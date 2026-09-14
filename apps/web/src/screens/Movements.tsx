@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
 import { api, isApiError, type Metal } from '../api.js';
 import { CustomSelect } from '../CustomSelect.js';
@@ -293,6 +293,19 @@ function GiftInForm({ onDone }: { onDone: () => void }) {
       setError(isApiError(requestError) ? requestError.message : '無法記錄贈與。'),
   });
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onDone();
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onDone]);
+
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
@@ -304,65 +317,105 @@ function GiftInForm({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="surface space-y-4 rounded-xl p-4">
-      <div>
-        <h2 className="font-medium">記錄收到的贈與</h2>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          成本基礎會用<strong>收到當下的市價</strong>
-          自動計算，而不是零。用零會讓整筆價值都變成獲利，報酬率就失去意義。
-        </p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Field
-          label="收到日期"
-          type="datetime-local"
-          value={occurredAt}
-          onChange={setOccurredAt}
-          required
-        />
-        <CustomSelect
-          id="gift-metal"
-          label="金屬"
-          value={metalCode}
-          onChange={setMetalCode}
-          options={(metals.data ?? []).map((metal) => ({
-            value: metal.code,
-            label: `${metal.code} — ${metal.name}`,
-          }))}
-        />
-        <Field label="商品名稱" value={name} onChange={setName} required />
-        <Field label="數量" type="number" value={quantity} onChange={setQuantity} required />
-        <Field
-          label="單件重量"
-          type="number"
-          value={unitWeight}
-          onChange={setUnitWeight}
-          required
-        />
-        <CustomSelect
-          id="gift-unit"
-          label="重量單位"
-          value={weightUnit}
-          onChange={(next) => setWeightUnit(next as WeightUnit)}
-          options={WEIGHT_UNITS.map((value) => ({ value, label: WEIGHT_UNIT_LABELS[value] }))}
-        />
-        <Field label="純度（0-1）" value={purity} onChange={setPurity} required />
-        <Field label="贈與人（選填）" value={counterparty} onChange={setCounterparty} />
-        <Field label="備註（選填）" value={notes} onChange={setNotes} />
-      </div>
-      {error && (
-        <p role="alert" className="text-danger text-sm">
-          {error}
-        </p>
-      )}
-      <button
-        type="submit"
-        disabled={submit.isPending}
-        className="rounded-lg bg-accent px-4 py-2 font-medium text-white shadow-sm disabled:opacity-50"
+    /*
+      A nine-field form used to open inline and push the movement list off the
+      screen. It is a bottom sheet now, the same shape as the disposal dialog:
+      it sits over the list, and the list is still there when it closes.
+    */
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="gift-in-title"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onDone();
+      }}
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="surface max-h-[90dvh] w-full max-w-2xl space-y-4 overflow-y-auto overscroll-contain rounded-2xl p-5"
       >
-        {submit.isPending ? '記錄中…' : '記錄贈與'}
-      </button>
-    </form>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 id="gift-in-title" className="text-lg font-semibold">
+              記錄收到的贈與
+            </h2>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              成本基礎會用<strong>收到當下的市價</strong>
+              自動計算，而不是零。用零會讓整筆價值都變成獲利，報酬率就失去意義。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onDone}
+            aria-label="關閉"
+            className="interactive-muted -mr-2 -mt-2 shrink-0 rounded-lg px-3"
+          >
+            ×
+          </button>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="收到日期"
+            type="datetime-local"
+            value={occurredAt}
+            onChange={setOccurredAt}
+            required
+          />
+          <CustomSelect
+            id="gift-metal"
+            label="金屬"
+            value={metalCode}
+            onChange={setMetalCode}
+            options={(metals.data ?? []).map((metal) => ({
+              value: metal.code,
+              label: `${metal.code} — ${metal.name}`,
+            }))}
+          />
+          <Field label="商品名稱" value={name} onChange={setName} required />
+          <Field label="數量" type="number" value={quantity} onChange={setQuantity} required />
+          <Field
+            label="單件重量"
+            type="number"
+            value={unitWeight}
+            onChange={setUnitWeight}
+            required
+          />
+          <CustomSelect
+            id="gift-unit"
+            label="重量單位"
+            value={weightUnit}
+            onChange={(next) => setWeightUnit(next as WeightUnit)}
+            options={WEIGHT_UNITS.map((value) => ({ value, label: WEIGHT_UNIT_LABELS[value] }))}
+          />
+          <Field label="純度（0-1）" value={purity} onChange={setPurity} required />
+          <Field label="贈與人（選填）" value={counterparty} onChange={setCounterparty} />
+          <Field label="備註（選填）" value={notes} onChange={setNotes} />
+        </div>
+        {error && (
+          <p role="alert" className="text-danger text-sm">
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="submit"
+            disabled={submit.isPending}
+            className="rounded-lg bg-accent px-4 py-2 font-medium text-white shadow-sm disabled:opacity-50"
+          >
+            {submit.isPending ? '記錄中…' : '記錄贈與'}
+          </button>
+          <button
+            type="button"
+            onClick={onDone}
+            disabled={submit.isPending}
+            className="interactive-muted rounded-lg px-4 py-2 font-medium disabled:opacity-30"
+          >
+            取消
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

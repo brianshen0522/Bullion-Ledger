@@ -4,6 +4,7 @@ import { isApiError } from '../api.js';
 import { resolveIdempotencyAttempt, type IdempotencyAttempt } from '../idempotency.js';
 import { WizardErrorSummary } from './fields.js';
 import { createBrowserWizardHistory, type WizardHistoryAdapter } from './history.js';
+import { WizardBack, WizardNext, WizardShell, WizardSubmit } from '../WizardShell.js';
 import { DocumentsStep, ProductPhotosStep } from './media.js';
 import { revokeWizardMediaPreview } from './media-utils.js';
 import {
@@ -224,29 +225,29 @@ export function PurchaseWizard({
   const furthestIndex = wizardStepIndex(draft.furthestStep);
 
   return (
-    <form
-      className="mx-auto min-w-0 max-w-5xl"
-      noValidate
-      aria-busy={finalizing}
-      onSubmit={(event) => {
-        event.preventDefault();
+    <WizardShell
+      eyebrow="行動入庫工作台"
+      subject="新增購買入庫"
+      stepLabel={PURCHASE_WIZARD_STEPS[currentIndex]?.label ?? ''}
+      stepIndex={currentIndex}
+      stepCount={PURCHASE_WIZARD_STEPS.length}
+      scrollKey={draft.currentStep}
+      busy={finalizing}
+      cancelLabel={onCancel ? '先離開' : '取消'}
+      onCancel={() => onCancel?.()}
+      onSubmit={() => {
         if (draft.currentStep === 'review' && !finalizing) void finalize();
       }}
-    >
-      <fieldset disabled={finalizing} className="m-0 min-w-0 space-y-5 border-0 p-0">
-        <header className="space-y-3" data-wizard-top>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-accent dark:text-teal-400">行動入庫工作台</p>
-              <h1 className="text-2xl font-semibold tracking-tight">新增購買入庫</h1>
-            </div>
-            <SaveStatus
-              localState={autosave.localState}
-              systemState={autosave.systemState}
-              localSavedAt={autosave.lastLocalSaveAt}
-              systemSavedAt={autosave.lastSystemSaveAt}
-            />
-          </div>
+      headerAside={
+        <SaveStatus
+          localState={autosave.localState}
+          systemState={autosave.systemState}
+          localSavedAt={autosave.lastLocalSaveAt}
+          systemSavedAt={autosave.lastSystemSaveAt}
+        />
+      }
+      banner={
+        <>
           {restoreStatus === 'restored' && (
             <ResumeNotice onDismiss={() => setRestoreStatus('missing')}>
               已接續先前儲存的入庫草稿。
@@ -258,158 +259,122 @@ export function PurchaseWizard({
             </ResumeNotice>
           )}
           {autosave.error && (
-            <p role="status" className="text-sm text-amber-800 dark:text-amber-200">
+            <p role="status" className="mb-3 text-sm text-amber-800 dark:text-amber-200">
               {autosave.error} 表單仍保留在目前頁面。
             </p>
           )}
+        </>
+      }
+      error={
+        finalizeError ? (
           <p
-            role="progressbar"
-            aria-valuemin={1}
-            aria-valuemax={PURCHASE_WIZARD_STEPS.length}
-            aria-valuenow={currentIndex + 1}
-            className="text-sm text-slate-600 dark:text-slate-300"
+            role="alert"
+            className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950"
           >
-            第 {currentIndex + 1}／{PURCHASE_WIZARD_STEPS.length} 步：
-            {PURCHASE_WIZARD_STEPS[currentIndex]?.label}
-          </p>
-          {/*
-            Two rows of three on a phone rather than one 34rem row that has to
-            be scrolled sideways to see the steps still ahead.
-          */}
-          <nav className="max-w-full" aria-label="入庫步驟">
-            <ol className="grid grid-cols-3 gap-1 sm:grid-cols-6">
-              {PURCHASE_WIZARD_STEPS.map((step, index) => {
-                const reached = index <= furthestIndex;
-                return (
-                  <li key={step.id}>
-                    <button
-                      type="button"
-                      aria-current={draft.currentStep === step.id ? 'step' : undefined}
-                      aria-disabled={!reached}
-                      disabled={!reached}
-                      className={`min-h-11 w-full rounded-lg px-1 py-2 text-xs font-medium motion-safe:transition-colors ${
-                        draft.currentStep === step.id
-                          ? 'bg-accent text-white shadow-sm'
-                          : reached
-                            ? 'interactive-muted bg-slate-100 dark:bg-slate-800'
-                            : 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-900 dark:text-slate-600'
-                      }`}
-                      onClick={() => reached && navigate(step.id)}
-                    >
-                      <span className="block">{index + 1}</span>
-                      <span>{step.shortLabel}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
-        </header>
-
-        <main className="min-w-0 motion-safe:transition-opacity">
-          {draft.currentStep === 'transaction' ? (
-            <TransactionStep
-              value={draft.transaction}
-              issues={issues}
-              onChange={(transaction) => updateDraft((current) => ({ ...current, transaction }))}
-            />
-          ) : draft.currentStep === 'items' ? (
-            <ItemsStep
-              items={draft.items}
-              metals={metals}
-              products={products}
-              organizations={organizations}
-              searchOrganizations={searchOrganizations}
-              issues={issues}
-              onChange={(items) =>
-                updateDraft((current) => {
-                  const validItemIds = new Set(items.map(({ id }) => id));
-                  return {
-                    ...current,
-                    items,
-                    photos: normalizePrimaryWizardPhotos(
-                      current.photos.map((photo) =>
-                        photo.targetItemId && !validItemIds.has(photo.targetItemId)
-                          ? { ...photo, targetItemId: undefined }
-                          : photo,
-                      ),
-                    ),
-                  };
-                })
-              }
-            />
-          ) : draft.currentStep === 'costs' ? (
-            <CostsStep
-              costs={draft.costs}
-              items={draft.items}
-              issues={issues}
-              onCostsChange={(costs) => updateDraft((current) => ({ ...current, costs }))}
-              onItemsChange={(items) => updateDraft((current) => ({ ...current, items }))}
-            />
-          ) : draft.currentStep === 'photos' ? (
-            <ProductPhotosStep
-              items={draft.items}
-              photos={draft.photos}
-              onChange={(photos) => updateDraft((current) => ({ ...current, photos }))}
-            />
-          ) : draft.currentStep === 'documents' ? (
-            <DocumentsStep
-              documents={draft.documents}
-              onChange={(documents) => updateDraft((current) => ({ ...current, documents }))}
-            />
-          ) : (
-            <>
-              <WizardErrorSummary issues={issues} />
-              <ReviewStep draft={draft} />
-            </>
-          )}
-        </main>
-
-        {finalizeError && (
-          <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950">
             {finalizeError}
           </p>
-        )}
-
-        <footer className="sticky-action-bar -mx-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-4 pt-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:mx-0 sm:rounded-xl sm:border">
-          <button
-            type="button"
-            disabled={currentIndex === 0 || finalizing}
-            className="interactive-muted rounded-lg px-4 font-medium disabled:opacity-30"
-            onClick={goBack}
-          >
-            上一步
-          </button>
+        ) : null
+      }
+      footer={
+        <>
+          <WizardBack disabled={currentIndex === 0 || finalizing} onClick={goBack} />
           {draft.currentStep === 'review' ? (
-            <button
-              type="submit"
-              disabled={finalizing}
-              className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50 dark:hover:bg-teal-600"
-            >
-              {finalizing ? '正在入庫…' : '確認並完成入庫'}
-            </button>
+            <WizardSubmit busy={finalizing} idle="確認並完成入庫" working="正在入庫…" />
           ) : (
-            <button
-              type="button"
-              className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
-              onClick={goNext}
-            >
-              下一步
-            </button>
+            <WizardNext onClick={goNext} />
           )}
-          {onCancel && (
-            <button
-              type="button"
-              disabled={finalizing}
-              className="interactive-muted rounded-lg px-3 text-sm font-medium disabled:opacity-30"
-              onClick={onCancel}
-            >
-              先離開
-            </button>
-          )}
-        </footer>
-      </fieldset>
-    </form>
+        </>
+      }
+    >
+      {/*
+        Steps stay reachable out of order only as far as the draft has already
+        been taken: a later step's validation depends on the earlier ones.
+      */}
+      <nav className="mb-4" aria-label="入庫步驟">
+        <ol className="grid grid-cols-3 gap-1 sm:grid-cols-6">
+          {PURCHASE_WIZARD_STEPS.map((step, index) => {
+            const reached = index <= furthestIndex;
+            return (
+              <li key={step.id}>
+                <button
+                  type="button"
+                  aria-current={draft.currentStep === step.id ? 'step' : undefined}
+                  aria-disabled={!reached}
+                  disabled={!reached}
+                  className={`min-h-11 w-full rounded-lg px-1 text-xs font-medium motion-safe:transition-colors ${
+                    draft.currentStep === step.id
+                      ? 'bg-accent text-white shadow-sm'
+                      : reached
+                        ? 'interactive-muted bg-slate-100 dark:bg-slate-800'
+                        : 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-900 dark:text-slate-600'
+                  }`}
+                  onClick={() => reached && navigate(step.id)}
+                >
+                  {step.shortLabel}
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+
+      {draft.currentStep === 'transaction' ? (
+        <TransactionStep
+          value={draft.transaction}
+          issues={issues}
+          onChange={(transaction) => updateDraft((current) => ({ ...current, transaction }))}
+        />
+      ) : draft.currentStep === 'items' ? (
+        <ItemsStep
+          items={draft.items}
+          metals={metals}
+          products={products}
+          organizations={organizations}
+          searchOrganizations={searchOrganizations}
+          issues={issues}
+          onChange={(items) =>
+            updateDraft((current) => {
+              const validItemIds = new Set(items.map(({ id }) => id));
+              return {
+                ...current,
+                items,
+                photos: normalizePrimaryWizardPhotos(
+                  current.photos.map((photo) =>
+                    photo.targetItemId && !validItemIds.has(photo.targetItemId)
+                      ? { ...photo, targetItemId: undefined }
+                      : photo,
+                  ),
+                ),
+              };
+            })
+          }
+        />
+      ) : draft.currentStep === 'costs' ? (
+        <CostsStep
+          costs={draft.costs}
+          items={draft.items}
+          issues={issues}
+          onCostsChange={(costs) => updateDraft((current) => ({ ...current, costs }))}
+          onItemsChange={(items) => updateDraft((current) => ({ ...current, items }))}
+        />
+      ) : draft.currentStep === 'photos' ? (
+        <ProductPhotosStep
+          items={draft.items}
+          photos={draft.photos}
+          onChange={(photos) => updateDraft((current) => ({ ...current, photos }))}
+        />
+      ) : draft.currentStep === 'documents' ? (
+        <DocumentsStep
+          documents={draft.documents}
+          onChange={(documents) => updateDraft((current) => ({ ...current, documents }))}
+        />
+      ) : (
+        <>
+          <WizardErrorSummary issues={issues} />
+          <ReviewStep draft={draft} />
+        </>
+      )}
+    </WizardShell>
   );
 }
 
@@ -545,6 +510,11 @@ function focusWizardIssue(issue: WizardValidationIssue | undefined) {
   }, 0);
 }
 
+/**
+ * The shell resets its own body on every step change, so this only has to
+ * cover a move that keeps the same step — a validation jump back into the step
+ * already on screen.
+ */
 function scrollWizardTop() {
   if (typeof document === 'undefined') return;
   globalThis.setTimeout(() => {

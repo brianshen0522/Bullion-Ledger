@@ -472,6 +472,24 @@ fit a phone as a button strip at any wrap, so the header names the current step
 and shows a progress bar; movement is 上一步／下一步, and each step is its own
 history entry.
 
+### One wizard chrome
+
+Every multi-step flow — 新增入庫, the holding editor, and 商品規格 — renders
+through `WizardShell`. It covers the page (`fixed inset-0`, `h-dvh`), pins the
+step name, progress bar and action bar, locks the body behind it, and leaves the
+current panel's body as the only scrollable region. Sharing it is what stops the
+app having two answers to "where is the Next button".
+
+商品規格庫 opened on an eight-field create form that was permanently expanded
+above the catalogue, and edited through an inline card that shoved the list
+rows around. Both are now that wizard (名稱與金屬 → 品牌與來源 → 純度與重量 →
+確認), and the page opens on the catalogue itself. Each step validates only its
+own fields; the review step validates all of them — faulting a step for a field
+the user has not reached yet is how a wizard traps someone with no way forward.
+
+收到贈與 is a bottom sheet with the same shape as the disposal dialog rather
+than a nine-field form pushing 異動紀錄 off the screen.
+
 ### Organization catalog
 
 Products and purchase snapshots distinguish `BRAND`, `ISSUER`, `REFINER`,

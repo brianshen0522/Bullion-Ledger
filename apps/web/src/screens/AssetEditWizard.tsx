@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { api, type AssetAttachment, type HeldAssetListItem } from '../api.js';
 import { CustomSelect } from '../CustomSelect.js';
+import { WizardBack, WizardNext, WizardShell, WizardSubmit } from '../WizardShell.js';
 import { createWizardMedia } from '../purchase-wizard/media-utils.js';
 import { renderCroppedPhoto, renderDocumentScan } from '../purchase-wizard/index.js';
 import { productFormLabel, productFormOptions } from '../product-forms.js';
@@ -152,22 +153,6 @@ export function AssetEditWizard({ asset, step, onStep, onDone, onCancel }: Asset
   );
 
   const stepIndex = assetEditStepIndex(step);
-  const formRef = useRef<HTMLFormElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  // The editor covers the page, so the first field is where work starts.
-  useEffect(() => {
-    const formElement = formRef.current;
-    if (!formElement) return;
-    formElement.scrollIntoView({ block: 'start', behavior: 'auto' });
-    formElement.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus();
-  }, []);
-
-  // Each panel starts at its own top. Without this, stepping from a panel that
-  // did overflow into one that does not leaves the next panel scrolled down.
-  useEffect(() => {
-    bodyRef.current?.scrollTo({ top: 0, behavior: 'auto' });
-  }, [step]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -267,176 +252,110 @@ export function AssetEditWizard({ asset, step, onStep, onDone, onCancel }: Asset
   }
 
   return (
-    /*
-      A full-screen editor rather than a panel inside the inventory list. The
-      page itself never scrolls: header and actions are pinned, and only the
-      current panel's body can move — and only when a panel genuinely overflows
-      a short screen. Each step is kept small enough that it usually does not.
-    */
-    <div className="fixed inset-0 z-50 flex h-dvh flex-col bg-paper dark:bg-slate-950">
-      <form
-        ref={formRef}
-        className="flex min-h-0 w-full flex-1 flex-col"
-        noValidate
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          if (step === 'review' && !saving) {
-            setSaving(true);
-            setSaveError(null);
-            saveMutation.mutate();
+    <WizardShell
+      eyebrow="編輯持有庫存"
+      subject={asset.name}
+      stepLabel={assetEditStepLabel(step)}
+      stepIndex={stepIndex}
+      stepCount={ASSET_EDIT_STEPS.length}
+      scrollKey={step}
+      busy={saving}
+      onCancel={onCancel}
+      onSubmit={() => {
+        if (step === 'review' && !saving) {
+          setSaving(true);
+          setSaveError(null);
+          saveMutation.mutate();
+        }
+      }}
+      error={
+        saveError ? (
+          <p
+            role="alert"
+            className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950"
+          >
+            {saveError}
+          </p>
+        ) : null
+      }
+      footer={
+        <>
+          <WizardBack
+            disabled={stepIndex === 0 || saving}
+            onClick={() => {
+              const previous = previousAssetEditStep(step);
+              if (previous) onStep(previous);
+            }}
+          />
+          {step === 'review' ? (
+            <WizardSubmit busy={saving} idle="確認並儲存" working="正在儲存…" />
+          ) : (
+            <WizardNext
+              onClick={() => {
+                const next = nextAssetEditStep(step);
+                if (next) onStep(next);
+              }}
+            />
+          )}
+        </>
+      }
+    >
+      {step === 'transaction' && (
+        <TransactionStep asset={asset} form={purchaseForm} onChange={setPurchaseForm} />
+      )}
+      {step === 'description' && (
+        <DescriptionStep asset={asset} form={form} onChange={patchField} />
+      )}
+      {step === 'spec' && <SpecStep asset={asset} form={form} onChange={patchField} />}
+      {step === 'cost' && <CostStep asset={asset} form={form} onChange={patchField} />}
+      {step === 'custody' && <CustodyStep form={form} onChange={patchField} />}
+      {step === 'photos' && (
+        <PhotoStep
+          loading={attachments.isPending}
+          error={attachments.error?.message ?? null}
+          photos={photos}
+          newPhotos={newPhotos}
+          onPatch={(id, next) =>
+            setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
           }
-        }}
-      >
-        <fieldset disabled={saving} className="m-0 flex min-h-0 flex-1 flex-col border-0 p-0">
-          <header className="safe-area-header shrink-0 border-b border-slate-200 bg-white pb-3 dark:border-slate-800 dark:bg-slate-900">
-            <div className="mx-auto flex w-full max-w-4xl items-center gap-3">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={onCancel}
-                className="interactive-muted -ml-2 shrink-0 rounded-lg px-2 text-sm font-medium disabled:opacity-30"
-              >
-                ← 取消
-              </button>
-              <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-600 dark:text-slate-300">
-                {asset.name}
-              </p>
-            </div>
-
-            <div className="mx-auto mt-2 w-full max-w-4xl">
-              <div className="flex items-baseline justify-between gap-3">
-                <h1 className="text-lg font-semibold tracking-tight">{assetEditStepLabel(step)}</h1>
-                <span className="shrink-0 text-xs text-slate-500 dark:text-slate-400">
-                  第 {stepIndex + 1}／{ASSET_EDIT_STEPS.length} 步
-                </span>
-              </div>
-              <div
-                role="progressbar"
-                aria-valuemin={1}
-                aria-valuemax={ASSET_EDIT_STEPS.length}
-                aria-valuenow={stepIndex + 1}
-                aria-label={`第 ${stepIndex + 1} 步，共 ${ASSET_EDIT_STEPS.length} 步：${assetEditStepLabel(step)}`}
-                className="mt-2 h-1 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
-              >
-                <div
-                  className="h-full rounded-full bg-accent motion-safe:transition-all"
-                  style={{ width: `${((stepIndex + 1) / ASSET_EDIT_STEPS.length) * 100}%` }}
-                />
-              </div>
-            </div>
-          </header>
-
-          {/*
-            The only scrollable region, and only when a panel overflows. Eight
-            small steps rather than three dense ones is what keeps that rare.
-          */}
-          <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto">
-            <div className="safe-area-inline mx-auto w-full max-w-4xl py-4">
-              {step === 'transaction' && (
-                <TransactionStep asset={asset} form={purchaseForm} onChange={setPurchaseForm} />
-              )}
-              {step === 'description' && (
-                <DescriptionStep asset={asset} form={form} onChange={patchField} />
-              )}
-              {step === 'spec' && <SpecStep asset={asset} form={form} onChange={patchField} />}
-              {step === 'cost' && <CostStep asset={asset} form={form} onChange={patchField} />}
-              {step === 'custody' && <CustodyStep form={form} onChange={patchField} />}
-              {step === 'photos' && (
-                <PhotoStep
-                  loading={attachments.isPending}
-                  error={attachments.error?.message ?? null}
-                  photos={photos}
-                  newPhotos={newPhotos}
-                  onPatch={(id, next) =>
-                    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
-                  }
-                  onPatchNew={(id, next) =>
-                    setNewPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
-                  }
-                  onDelete={removeExisting}
-                  onDeleteNew={removeNew}
-                  onSetCover={selectCover}
-                  onAdd={(files, source) => addFiles(files, 'photo', source)}
-                />
-              )}
-              {step === 'documents' && (
-                <DocStep
-                  loading={attachments.isPending}
-                  error={attachments.error?.message ?? null}
-                  documents={documents}
-                  newDocs={newDocs}
-                  onPatch={(id, next) =>
-                    setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
-                  }
-                  onPatchNew={(id, next) =>
-                    setNewDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
-                  }
-                  onDelete={removeExisting}
-                  onDeleteNew={removeNew}
-                  onAdd={(files, source) => addFiles(files, 'document', source)}
-                />
-              )}
-              {step === 'review' && (
-                <ReviewStep
-                  asset={asset}
-                  form={form}
-                  purchaseForm={purchaseForm}
-                  photoCount={photos.length + newPhotos.length}
-                  docCount={documents.length + newDocs.length}
-                  addedCount={newPhotos.length + newDocs.length}
-                  removedCount={deletedIds.current.size}
-                />
-              )}
-
-              {saveError && (
-                <p
-                  role="alert"
-                  className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950"
-                >
-                  {saveError}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <footer className="shrink-0 border-t border-slate-200 bg-white pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 dark:border-slate-800 dark:bg-slate-900">
-            <div className="safe-area-inline mx-auto flex w-full max-w-4xl items-center gap-2">
-              <button
-                type="button"
-                disabled={stepIndex === 0 || saving}
-                className="interactive-muted rounded-lg px-4 font-medium disabled:opacity-30"
-                onClick={() => {
-                  const previous = previousAssetEditStep(step);
-                  if (previous) onStep(previous);
-                }}
-              >
-                上一步
-              </button>
-              {step === 'review' ? (
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50 dark:hover:bg-teal-600"
-                >
-                  {saving ? '正在儲存…' : '確認並儲存'}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
-                  onClick={() => {
-                    const next = nextAssetEditStep(step);
-                    if (next) onStep(next);
-                  }}
-                >
-                  下一步
-                </button>
-              )}
-            </div>
-          </footer>
-        </fieldset>
-      </form>
-    </div>
+          onPatchNew={(id, next) =>
+            setNewPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
+          }
+          onDelete={removeExisting}
+          onDeleteNew={removeNew}
+          onSetCover={selectCover}
+          onAdd={(files, source) => addFiles(files, 'photo', source)}
+        />
+      )}
+      {step === 'documents' && (
+        <DocStep
+          loading={attachments.isPending}
+          error={attachments.error?.message ?? null}
+          documents={documents}
+          newDocs={newDocs}
+          onPatch={(id, next) =>
+            setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
+          }
+          onPatchNew={(id, next) =>
+            setNewDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
+          }
+          onDelete={removeExisting}
+          onDeleteNew={removeNew}
+          onAdd={(files, source) => addFiles(files, 'document', source)}
+        />
+      )}
+      {step === 'review' && (
+        <ReviewStep
+          asset={asset}
+          form={form}
+          purchaseForm={purchaseForm}
+          photoCount={photos.length + newPhotos.length}
+          docCount={documents.length + newDocs.length}
+          addedCount={newPhotos.length + newDocs.length}
+          removedCount={deletedIds.current.size}
+        />
+      )}
+    </WizardShell>
   );
 }
 
@@ -511,11 +430,13 @@ function TransactionStep({
       )}
 
       <div className="surface rounded-xl p-4">
-        <h3 className="font-medium">不可修改</h3>
+        <h3 className="font-medium">在別處修改</h3>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          購入日期與幣別決定了這筆交易的成本分攤與購入當下行情快照，改動會讓已存的溢價與熔值失真，因此只能透過重新建檔更正。
+          幣別請到「成本與幣別」那一步更改。購入日期與金屬決定了成本分攤與購入當下的行情快照，
+          改動會讓已存的溢價與熔值失真，因此只能透過重新建檔更正。
         </p>
         <dl className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <InfoItem label="幣別" value={`${asset.currency}（可於「成本與幣別」修改）`} />
           <InfoItem
             label="購入日期"
             value={
@@ -524,7 +445,6 @@ function TransactionStep({
                 : '—'
             }
           />
-          <InfoItem label="幣別" value={asset.currency} />
           <InfoItem label="金屬" value={`${asset.metal.code} — ${asset.metal.name}`} />
           <InfoItem
             label="入庫時間"
@@ -1297,6 +1217,8 @@ function ReviewStep({
   if (asset.hasCertificate !== form.hasCertificate) {
     push('附有證書', asset.hasCertificate ? '是' : '否', form.hasCertificate ? '是' : '否');
   }
+
+  push('幣別', asset.currency, form.currency.trim().toUpperCase());
 
   const original = initialPurchaseForm(asset);
   const purchaseLabels: Record<keyof PurchaseEditForm, string> = {

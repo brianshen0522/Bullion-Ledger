@@ -23,6 +23,11 @@ const editorSource = readFileSync(
   fileURLToPath(new URL('../src/screens/AssetEditWizard.tsx', import.meta.url)),
   'utf8',
 );
+// The chrome every wizard shares: busy state, focus, scrolling.
+const shellSource = readFileSync(
+  fileURLToPath(new URL('../src/WizardShell.tsx', import.meta.url)),
+  'utf8',
+);
 
 // The brace prefix disambiguates the two guards: searching for
 // `isDesktop && (` alone also matches inside `!isDesktop && (`.
@@ -78,7 +83,8 @@ describe('inventory actions reach both layouts', () => {
   it('locks every row action while a disposal dialog is open', () => {
     // Editing is a page of its own now, so there are no rows behind it to lock.
     expect(source).toContain('const actionsDisabled = Boolean(isPending || disposal)');
-    expect(editorSource).toContain('<fieldset disabled={saving}');
+    expect(editorSource).toContain('busy={saving}');
+    expect(shellSource).toContain('<fieldset disabled={busy}');
   });
 
   it('shows edit context, constrains text fields, and moves focus to the form', () => {
@@ -87,10 +93,7 @@ describe('inventory actions reach both layouts', () => {
     expect(editorSource).toContain('label="分攤成本"');
     // Serial and storage location both match the API's 128-character bound.
     expect(editorSource.match(/maxLength=\{128\}/g)).toHaveLength(2);
-    expect(editorSource).toContain(
-      "querySelector<HTMLInputElement>('input:not(:disabled)')?.focus",
-    );
-    expect(editorSource).toContain('formElement.scrollIntoView');
+    expect(shellSource).toContain("querySelector<HTMLInputElement>('input:not(:disabled)')?.focus");
   });
 
   it('uses the whole failed thumbnail as an accessible retry target', () => {
