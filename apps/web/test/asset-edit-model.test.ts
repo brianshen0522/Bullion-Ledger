@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { AssetAttachment, HeldAssetListItem } from '../src/api.js';
 import {
+  COST_CURRENCIES,
   attachmentReadPath,
   attachmentReviewPatches,
   assetPatchHasChanges,
   buildAssetPatch,
   buildPurchasePatch,
+  currencyChangeScope,
   documentPreview,
   initialAssetForm,
   initialPurchaseForm,
@@ -141,6 +143,51 @@ describe('unit weight conversion', () => {
   it('reports an unusable entry rather than guessing', () => {
     expect(unitWeightGrams({ unitWeight: '', weightUnit: 'g' })).toBeNull();
     expect(unitWeightGrams({ unitWeight: 'x', weightUnit: 'g' })).toBeNull();
+  });
+});
+
+describe('currency correction', () => {
+  it('routes a purchased lot through the purchase, not the holding', () => {
+    const held = asset();
+    expect(currencyChangeScope(held)).toBe('purchase');
+
+    const form = { ...initialAssetForm(held), currency: 'USD' };
+    const assetPatch = buildAssetPatch(held, form);
+    // Relabelling one lot of a transaction would split it across two
+    // currencies, which is what makes the dashboard withhold P&L.
+    expect('patch' in assetPatch && 'currency' in assetPatch.patch).toBe(false);
+    expect(buildPurchasePatch(held, initialPurchaseForm(held), form)).toEqual({
+      currency: 'USD',
+    });
+  });
+
+  it('routes a gift-received lot through the holding, since it has no purchase', () => {
+    const gift = asset({ purchase: null });
+    expect(currencyChangeScope(gift)).toBe('asset');
+
+    const form = { ...initialAssetForm(gift), currency: 'usd' };
+    expect(buildAssetPatch(gift, form)).toEqual({ patch: { version: 3, currency: 'USD' } });
+    expect(buildPurchasePatch(gift, initialPurchaseForm(gift), form)).toEqual({});
+  });
+
+  it('sends nothing when the currency is unchanged', () => {
+    const held = asset();
+    const form = initialAssetForm(held);
+    expect(buildPurchasePatch(held, initialPurchaseForm(held), form)).toEqual({});
+    expect(
+      'patch' in buildAssetPatch(held, form) &&
+        assetPatchHasChanges(
+          (buildAssetPatch(held, form) as { patch: Record<string, unknown> & { version: number } })
+            .patch,
+        ),
+    ).toBe(false);
+  });
+
+  it('offers the currencies a cost can plausibly be recorded in', () => {
+    expect(COST_CURRENCIES).toContain('TWD');
+    expect(COST_CURRENCIES).toContain('USD');
+    // XAU/XAG are metals-as-currency for market quotes, never a cost currency.
+    expect(COST_CURRENCIES).not.toContain('XAU');
   });
 });
 

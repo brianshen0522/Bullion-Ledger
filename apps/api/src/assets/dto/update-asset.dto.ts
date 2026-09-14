@@ -10,7 +10,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { MONEY_INPUT_RE, PURITY_INPUT_RE, WEIGHT_INPUT_RE } from '@bullion-ledger/shared';
-import { IsWeightUnitValue } from '../../common/decorators/validators.js';
+import { IsCurrencyCodeValue, IsWeightUnitValue } from '../../common/decorators/validators.js';
 
 export class UpdateAssetDto {
   @IsInt()
@@ -42,6 +42,16 @@ export class UpdateAssetDto {
   @IsString()
   @Matches(MONEY_INPUT_RE)
   allocatedCost?: string;
+
+  /**
+   * Only for a holding that came from no purchase (a received gift). A holding
+   * created by a purchase shares that purchase's currency, and relabelling one
+   * lot alone would read as a multi-currency ledger; correct it through
+   * PATCH /purchases/:id instead.
+   */
+  @IsOptional()
+  @IsCurrencyCodeValue()
+  currency?: string;
 
   @IsOptional()
   @IsString()

@@ -464,6 +464,34 @@ describe('AssetsService update', () => {
     expect(tx.asset.updateMany).not.toHaveBeenCalled();
   });
 
+  it('relabels a gift-received holding currency', async () => {
+    const { service, tx } = makeServiceWithTx();
+    const gift = { ...BASE_ASSET, purchaseId: null, purchase: null, currency: 'TWD' };
+    tx.asset.updateMany.mockResolvedValue({ count: 1 });
+    tx.asset.findUnique
+      .mockResolvedValueOnce(gift)
+      .mockResolvedValueOnce({ ...gift, currency: 'USD', version: 2 });
+
+    const result = await service.update('asset-1', { version: 1, currency: 'usd' }, {});
+
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ currency: 'USD' }) }),
+    );
+    expect(result.currency).toBe('USD');
+  });
+
+  it('refuses to relabel one lot of a purchase on its own', async () => {
+    // Splitting a single transaction across two currencies is what makes the
+    // dashboard withhold P&L; the purchase endpoint relabels all of it at once.
+    const { service, tx } = makeServiceWithTx();
+    tx.asset.findUnique.mockResolvedValue(BASE_ASSET);
+
+    await expect(service.update('asset-1', { version: 1, currency: 'USD' }, {})).rejects.toThrow(
+      /purchase/i,
+    );
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+  });
+
   it('updates quantity-only: derives unit weight from old gross/old quantity, no drift', async () => {
     const { service, tx } = makeServiceWithTx();
     tx.asset.findUnique.mockResolvedValue(BASE_ASSET);

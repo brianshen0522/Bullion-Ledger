@@ -50,10 +50,17 @@ describe('wide tables have a phone layout', () => {
 });
 
 describe('wizard step strips fit a phone', () => {
-  it('wraps instead of scrolling sideways', () => {
-    for (const source of [wizard, read('screens/AssetEditWizard.tsx')]) {
-      expect(source).toContain('grid-cols-3');
-      expect(source).not.toContain('min-w-[34rem]');
-    }
+  it('wraps the purchase wizard strip instead of scrolling sideways', () => {
+    expect(wizard).toContain('grid-cols-3');
+    expect(wizard).not.toContain('min-w-[34rem]');
+  });
+
+  it('replaces the holding editor strip with a progress bar', () => {
+    // Eight steps will not fit as buttons on a phone at any wrap, so the
+    // editor names the current step and shows how far along it is.
+    const editor = read('screens/AssetEditWizard.tsx');
+    expect(editor).not.toContain('min-w-[34rem]');
+    expect(editor).toContain('role="progressbar"');
+    expect(editor).toContain('assetEditStepLabel(step)');
   });
 });

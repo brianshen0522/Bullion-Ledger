@@ -211,7 +211,7 @@ change. Compose runs shared-package watchers in both application containers.
 | GET | `/api/purchases` | List purchases |
 | GET | `/api/purchases/:id` | Get purchase with items/assets |
 | POST | `/api/purchases` | Create purchase atomically; requires `Idempotency-Key` |
-| PATCH | `/api/purchases/:id` | Correct transaction metadata (dealer, branch, order/invoice number, payment method, notes) |
+| PATCH | `/api/purchases/:id` | Correct transaction metadata (dealer, branch, order/invoice number, payment method, notes) and the currency |
 | POST | `/api/purchase-intakes` | Create/resume a user-owned wizard draft |
 | GET | `/api/purchase-intakes` | List the current user's wizard drafts |
 | GET | `/api/purchase-intakes/:id` | Read a wizard draft and active attachments |
@@ -420,16 +420,57 @@ historical record). Submitting the inherited value back, or clearing the field,
 drops the override and restores inheritance.
 
 Transaction metadata is shared by the whole purchase and is edited through
-`PATCH /api/purchases/:id`. `purchasedAt`, the currency, the amounts and the
-allocation method are deliberately not editable there: they are inputs to the
-committed allocation and to the purchase-time spot snapshot (PRD §9), so
-changing one in place would silently invalidate stored premium and melt figures.
+`PATCH /api/purchases/:id`. `purchasedAt`, the amounts and the allocation method
+are deliberately not editable there: they are inputs to the committed allocation
+and to the purchase-time spot snapshot (PRD §9), so changing one in place would
+silently invalidate stored premium and melt figures.
+
+### Correcting the currency
+
+Choosing the wrong currency at entry mislabels amounts that were themselves
+correct, so `currency` is the one figure-adjacent field `PATCH /api/purchases/:id`
+does accept. Changing it relabels the purchase and every holding it produced
+**without converting a single number** — the digits were right, the code was not.
+Leaving the lots on the old code would read as a genuinely multi-currency ledger
+and suppress the dashboard's P&L (PRD §10.4), so they move together in one
+transaction.
+
+The stored `PurchasePriceSnapshot` is expressed in the old currency and is not
+convertible after the fact — the rate that applied on the purchase date is what
+matters — so the row is deleted and a fresh snapshot is queued on the worker.
+Until it lands, the purchase is simply one of the "awaiting market data" counts
+the dashboard already reports.
+
+A holding that came from no purchase (a received gift) has no transaction to
+follow, so `PATCH /api/assets/:id` relabels it directly. The same endpoint
+refuses `currency` for a purchased lot and says where to change it instead.
 
 Documents uploaded through the purchase wizard stay on the `Purchase` and are
 shared by every lot from it, while photos are reassigned to their holding.
 `GET /api/assets/:assetId/attachments` returns both, tagged by `purchaseId` /
 `assetId`, so the holding editor can show an invoice and say that removing it
 affects the other lots too.
+
+### Inventory: list, holding, editor
+
+持有庫存 is three views behind one screen, each addressable in the URL so the
+back button, a reload and a shared link all behave:
+
+- `?screen=inventory` — the list.
+- `&asset=<id>` — one holding in full: a photo gallery over every stored
+  photo, every physical and financial figure, the transaction it came from, and
+  every document with an inline preview. A row can only ever carry a summary, so
+  this is where checking a holding happens rather than inside the editor.
+- `&assetStep=<step>` — the editor, as a full-screen wizard.
+
+The editor covers the page (`fixed inset-0`, `h-dvh`) with a pinned header and
+action bar: the page itself cannot scroll, and only the current panel's body can
+move, and only when a panel genuinely overflows a short screen. Keeping that
+rare is what the eight small steps are for — 交易資訊, 商品描述, 規格, 成本與幣別,
+保管與證書, 照片, 文件, 確認 — instead of three dense ones. Eight steps will not
+fit a phone as a button strip at any wrap, so the header names the current step
+and shows a progress bar; movement is 上一步／下一步, and each step is its own
+history entry.
 
 ### Organization catalog
 

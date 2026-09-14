@@ -1,4 +1,5 @@
 import { PURCHASE_WIZARD_STEP_PARAM, readWizardStepFromSearch } from './purchase-wizard/history.js';
+import { ASSET_PARAM, ASSET_STEP_PARAM } from './screens/inventory-route.js';
 
 export const SCREEN_PARAM = 'screen';
 export const SCREENS = [
@@ -25,14 +26,19 @@ export function readScreenFromSearch(search: string): Screen {
 }
 
 /**
- * Produces a reloadable app URL. Wizard steps are retained only while the
- * purchase screen is active so stale step state cannot leak into other pages.
+ * Produces a reloadable app URL. Per-screen state — the purchase wizard's step,
+ * the inventory screen's open holding — is retained only while its own screen
+ * is active, so it cannot leak into another page.
  */
 export function urlForScreen(href: string, screen: Screen, parameter = SCREEN_PARAM): string {
   const url = new URL(href, 'http://localhost');
   if (screen === 'dashboard') url.searchParams.delete(parameter);
   else url.searchParams.set(parameter, screen);
   if (screen !== 'purchase') url.searchParams.delete(PURCHASE_WIZARD_STEP_PARAM);
+  if (screen !== 'inventory') {
+    url.searchParams.delete(ASSET_PARAM);
+    url.searchParams.delete(ASSET_STEP_PARAM);
+  }
   return `${url.pathname}${url.search}${url.hash}`;
 }
 

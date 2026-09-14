@@ -59,17 +59,27 @@ describe('app shell layout', () => {
     );
   });
 
-  it('floats a wizard action bar above the tab bar, not underneath it', () => {
+  it('floats an in-page wizard action bar above the tab bar, not underneath it', () => {
     expect(cssSource).toContain(
       'bottom: calc(var(--app-bottom-nav) + env(safe-area-inset-bottom))',
     );
-    for (const file of ['screens/AssetEditWizard.tsx', 'purchase-wizard/PurchaseWizard.tsx']) {
-      const source = readFileSync(
-        fileURLToPath(new URL(`../src/${file}`, import.meta.url)),
-        'utf8',
-      );
-      expect(source).toContain('sticky-action-bar');
-      expect(source).not.toContain('sticky bottom-0 z-20');
-    }
+    const purchase = readFileSync(
+      fileURLToPath(new URL('../src/purchase-wizard/PurchaseWizard.tsx', import.meta.url)),
+      'utf8',
+    );
+    expect(purchase).toContain('sticky-action-bar');
+    expect(purchase).not.toContain('sticky bottom-0 z-20');
+  });
+
+  it('gives the holding editor its own full-screen chrome instead', () => {
+    // It covers the tab bar rather than sitting above it, so the page behind
+    // cannot scroll underneath the panel the user is filling in.
+    const editor = readFileSync(
+      fileURLToPath(new URL('../src/screens/AssetEditWizard.tsx', import.meta.url)),
+      'utf8',
+    );
+    expect(editor).toContain('fixed inset-0 z-50 flex h-dvh flex-col');
+    expect(editor).toContain('min-h-0 flex-1 overflow-y-auto');
+    expect(editor).not.toContain('sticky-action-bar');
   });
 });

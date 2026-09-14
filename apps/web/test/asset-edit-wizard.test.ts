@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AssetEditWizard } from '../src/screens/AssetEditWizard.js';
 import type { HeldAssetListItem } from '../src/api.js';
+import { ASSET_EDIT_STEPS, type AssetEditStep } from '../src/screens/inventory-route.js';
 
 const asset = {
   id: 'asset-1',
@@ -46,7 +47,10 @@ const asset = {
   photos: [],
 } as unknown as HeldAssetListItem;
 
-function renderWith(overrides: Partial<HeldAssetListItem> = {}) {
+function renderWith(
+  overrides: Partial<HeldAssetListItem> = {},
+  step: AssetEditStep = 'description',
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
     createElement(
@@ -54,6 +58,8 @@ function renderWith(overrides: Partial<HeldAssetListItem> = {}) {
       { client },
       createElement(AssetEditWizard, {
         asset: { ...asset, ...overrides },
+        step,
+        onStep: () => {},
         onDone: () => {},
         onCancel: () => {},
       }),
@@ -61,24 +67,31 @@ function renderWith(overrides: Partial<HeldAssetListItem> = {}) {
   );
 }
 
-function render() {
-  return renderWith();
+function render(step: AssetEditStep = 'description') {
+  return renderWith({}, step);
 }
 
 /**
- * Editing an existing holding is not a linear wizard — every section already
- * holds data — so none of the section buttons may be gated behind the one
- * before it, the way the purchase wizard gates its steps.
+ * A full-screen editor: one small panel at a time, with the page itself fixed
+ * so the only thing that can move is a panel that genuinely overflows.
  */
 describe('holding editor', () => {
-  it('opens on the product section with every section reachable', () => {
+  it('renders one panel at a time under a pinned header and footer', () => {
     const markup = render();
     expect(markup).toContain('楓葉金幣');
-    expect(markup).toContain('商品資訊');
-    for (const label of ['交易', '商品', '成本', '照片', '文件', '確認']) {
-      expect(markup).toContain(`>${label}</button>`);
+    expect(markup).toContain('商品描述');
+    expect(markup).toContain('第 2／8 步');
+    // The spec and cost panels belong to other steps and must not be rendered.
+    expect(markup).not.toContain('分攤成本');
+    expect(markup).not.toContain('存放位置');
+  });
+
+  it('names and measures every step it can open', () => {
+    for (const [index, step] of ASSET_EDIT_STEPS.entries()) {
+      const markup = render(step.id);
+      expect(markup).toContain(step.label);
+      expect(markup).toContain(`第 ${index + 1}／${ASSET_EDIT_STEPS.length} 步`);
     }
-    expect(markup).not.toContain('disabled=""');
   });
 
   it('shows what a catalog-linked field inherits, without offering an undo it does not need', () => {
@@ -91,7 +104,7 @@ describe('holding editor', () => {
   });
 
   it('lets the weight be entered in a unit other than grams', () => {
-    const markup = render();
+    const markup = render('spec');
     expect(markup).toContain('單件重量');
     expect(markup).toContain('重量單位');
     expect(markup).toContain('gram (g)');
@@ -101,5 +114,16 @@ describe('holding editor', () => {
     const markup = renderWith({ name: '我的楓葉金幣', overriddenFields: ['name'] });
     expect(markup).toContain('>恢復沿用</button>');
     expect(markup).toContain('商品規格：楓葉金幣');
+  });
+
+  it('offers the currency on the cost step and says how far a change reaches', () => {
+    const purchased = render('cost');
+    expect(purchased).toContain('幣別');
+    expect(purchased).toContain('TWD');
+    expect(purchased).toContain('屬於整筆買入');
+
+    // A received gift has no purchase behind it, so only that lot is affected.
+    const gift = renderWith({ purchase: null }, 'cost');
+    expect(gift).toContain('只影響這一批');
   });
 });

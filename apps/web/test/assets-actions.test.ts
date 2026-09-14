@@ -40,8 +40,16 @@ describe('inventory actions reach both layouts', () => {
 
   it('builds both layouts from the one shared action list', () => {
     // Sharing the list is what stops an action existing in only one layout.
-    expect(DESKTOP_TABLE).toContain('assetActions(asset, onEdit, setDisposal, actionsDisabled)');
-    expect(MOBILE_LIST).toContain('assetActions(asset, onEdit, setDisposal, actionsDisabled)');
+    expect(DESKTOP_TABLE).toContain('assetActions(asset, onEdit, onDispose, actionsDisabled)');
+    expect(MOBILE_LIST).toContain('assetActions(asset, onEdit, onDispose, actionsDisabled)');
+  });
+
+  it('opens the holding detail page from both layouts', () => {
+    // The row summary cannot show every photo, document and transaction field,
+    // so each layout needs a way into the full record.
+    expect(DESKTOP_TABLE).toContain('onClick={() => onOpen(asset.id)}');
+    expect(MOBILE_LIST).toContain('onOpen={() => onOpen(asset.id)}');
+    expect(source).toContain('查看詳細資料');
   });
 
   it('includes every action in that shared list', () => {
@@ -58,29 +66,25 @@ describe('inventory actions reach both layouts', () => {
     expect(DESKTOP_TABLE).not.toContain('flex-col items-start gap-0.5');
   });
 
-  it('renders the disposal dialog once, driven by shared state', () => {
-    expect(source).toContain('<AssetDisposalDialog');
-    expect(source.match(/<AssetDisposalDialog/g)).toHaveLength(1);
+  it('drives every disposal dialog from one piece of state', () => {
+    // The list and the detail page each render it, but both read the same
+    // `disposal` state, so an action can never open two dialogs at once.
+    expect(source).toContain('onDispose={setDisposal}');
+    expect(source).toContain('disposal={disposal}');
+    expect(source).toContain('target={disposalTarget(');
+    expect(source.match(/function disposalTarget/g)).toHaveLength(1);
   });
 
-  it('keeps an edit draft mounted when filters hide its row', () => {
-    expect(source).toContain('allAssets={allAssets}');
-    expect(source).toContain('allAssets.find((asset) => asset.id === editingId)');
-    expect(source.indexOf('<InventoryList')).toBeLessThan(
-      source.indexOf('{visibleAssets.length === 0 && ('),
-    );
-  });
-
-  it('locks every row action while an edit is active', () => {
-    expect(source).toContain('const actionsDisabled = Boolean(isPending || editingId || disposal)');
+  it('locks every row action while a disposal dialog is open', () => {
+    // Editing is a page of its own now, so there are no rows behind it to lock.
+    expect(source).toContain('const actionsDisabled = Boolean(isPending || disposal)');
     expect(editorSource).toContain('<fieldset disabled={saving}');
   });
 
   it('shows edit context, constrains text fields, and moves focus to the form', () => {
-    expect(editorSource).toContain(
-      '<h1 className="text-2xl font-semibold tracking-tight">{asset.name}</h1>',
-    );
-    expect(editorSource).toContain('label={`分攤成本 (${currency})`}');
+    // The holding's name stays visible in the editor header, above the step.
+    expect(editorSource).toContain('{asset.name}');
+    expect(editorSource).toContain('label="分攤成本"');
     // Serial and storage location both match the API's 128-character bound.
     expect(editorSource.match(/maxLength=\{128\}/g)).toHaveLength(2);
     expect(editorSource).toContain(

@@ -9,12 +9,14 @@ import { productFormLabel, productFormOptions } from '../product-forms.js';
 import { formatGrams, formatMoney } from '../units.js';
 import { WEIGHT_UNITS, WEIGHT_UNIT_LONG_LABELS, type WeightUnit } from '@bullion-ledger/shared';
 import {
+  COST_CURRENCIES,
   OVERRIDABLE_FIELDS,
   attachmentReadPath,
   attachmentReviewPatches,
   assetPatchHasChanges,
   buildAssetPatch,
   buildPurchasePatch,
+  currencyChangeScope,
   documentPreview,
   initialAssetForm,
   initialPurchaseForm,
@@ -26,19 +28,16 @@ import {
   type OverridableField,
   type PurchaseEditForm,
 } from './asset-edit-model.js';
+import {
+  ASSET_EDIT_STEPS,
+  assetEditStepIndex,
+  assetEditStepLabel,
+  nextAssetEditStep,
+  previousAssetEditStep,
+  type AssetEditStep,
+} from './inventory-route.js';
 
 type UploadedVariant = { kind: string; revision: number; attachmentVersion: number };
-
-type EditStepId = 'transaction' | 'details' | 'costs' | 'photos' | 'documents' | 'review';
-
-const EDIT_STEPS: { id: EditStepId; label: string; shortLabel: string }[] = [
-  { id: 'transaction', label: '交易資訊', shortLabel: '交易' },
-  { id: 'details', label: '商品資訊', shortLabel: '商品' },
-  { id: 'costs', label: '成本', shortLabel: '成本' },
-  { id: 'photos', label: '照片管理', shortLabel: '照片' },
-  { id: 'documents', label: '文件', shortLabel: '文件' },
-  { id: 'review', label: '確認儲存', shortLabel: '確認' },
-];
 
 const PHOTO_KINDS: ReadonlyArray<readonly [string, string]> = [
   ['front', '正面'],
@@ -98,12 +97,14 @@ interface NewMedia {
 
 interface AssetEditWizardProps {
   asset: HeldAssetListItem;
+  /** Current step, owned by the URL so back/reload land on the same panel. */
+  step: AssetEditStep;
+  onStep: (step: AssetEditStep) => void;
   onDone: () => void;
   onCancel: () => void;
 }
 
-export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProps) {
-  const [step, setStep] = useState<EditStepId>('details');
+export function AssetEditWizard({ asset, step, onStep, onDone, onCancel }: AssetEditWizardProps) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const queryClient = useQueryClient();
@@ -150,12 +151,11 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
     [],
   );
 
-  const stepIndex = EDIT_STEPS.findIndex((s) => s.id === step);
+  const stepIndex = assetEditStepIndex(step);
   const formRef = useRef<HTMLFormElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
-  // The editor opens inline, inside the inventory list. Without this the page
-  // stays where it was and a keyboard or screen-reader user has no idea an
-  // editor appeared below them.
+  // The editor covers the page, so the first field is where work starts.
   useEffect(() => {
     const formElement = formRef.current;
     if (!formElement) return;
@@ -163,12 +163,18 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
     formElement.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus();
   }, []);
 
+  // Each panel starts at its own top. Without this, stepping from a panel that
+  // did overflow into one that does not leaves the next panel scrolled down.
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0, behavior: 'auto' });
+  }, [step]);
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       const result = buildAssetPatch(asset, form);
       if ('error' in result) throw new Error(result.error);
       const patch = result.patch;
-      const purchasePatch = buildPurchasePatch(asset, purchaseForm);
+      const purchasePatch = buildPurchasePatch(asset, purchaseForm, form);
 
       for (const id of deletedIds.current) {
         await api.delete(`/attachments/${encodeURIComponent(id)}`);
@@ -261,10 +267,16 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
   }
 
   return (
-    <div className="min-w-0">
+    /*
+      A full-screen editor rather than a panel inside the inventory list. The
+      page itself never scrolls: header and actions are pinned, and only the
+      current panel's body can move — and only when a panel genuinely overflows
+      a short screen. Each step is kept small enough that it usually does not.
+    */
+    <div className="fixed inset-0 z-50 flex h-dvh flex-col bg-paper dark:bg-slate-950">
       <form
         ref={formRef}
-        className="mx-auto min-w-0 max-w-5xl"
+        className="flex min-h-0 w-full flex-1 flex-col"
         noValidate
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
@@ -275,160 +287,152 @@ export function AssetEditWizard({ asset, onDone, onCancel }: AssetEditWizardProp
           }
         }}
       >
-        <fieldset disabled={saving} className="m-0 min-w-0 space-y-5 border-0 p-0">
-          <header className="space-y-3" data-wizard-top>
-            <div>
-              <p className="text-sm font-medium text-accent dark:text-teal-400">編輯持有庫存</p>
-              <h1 className="text-2xl font-semibold tracking-tight">{asset.name}</h1>
-            </div>
-
-            <p
-              role="progressbar"
-              aria-valuemin={1}
-              aria-valuemax={EDIT_STEPS.length}
-              aria-valuenow={stepIndex + 1}
-              className="sr-only"
-            >
-              第 {stepIndex + 1}／{EDIT_STEPS.length} 段：{EDIT_STEPS[stepIndex]?.label}
-            </p>
-
-            {/*
-              Editing is not a linear wizard: every section already has data, so
-              any of them can be opened directly. Two rows of full-width buttons
-              also fit a phone without the horizontal scroll the six-column strip
-              needed.
-            */}
-            <nav aria-label="編輯區段">
-              <ol className="grid grid-cols-3 gap-1 sm:grid-cols-6">
-                {EDIT_STEPS.map((s) => (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      aria-current={step === s.id ? 'step' : undefined}
-                      className={`min-h-11 w-full rounded-lg px-1 text-xs font-medium motion-safe:transition-colors ${
-                        step === s.id
-                          ? 'bg-accent text-white shadow-sm'
-                          : 'interactive-muted bg-slate-100 dark:bg-slate-800'
-                      }`}
-                      onClick={() => setStep(s.id)}
-                    >
-                      {s.shortLabel}
-                    </button>
-                  </li>
-                ))}
-              </ol>
-            </nav>
-          </header>
-
-          <main className="min-w-0">
-            {step === 'transaction' && (
-              <TransactionStep asset={asset} form={purchaseForm} onChange={setPurchaseForm} />
-            )}
-            {step === 'details' && <DetailsStep asset={asset} form={form} onChange={patchField} />}
-            {step === 'costs' && (
-              <CostsStep
-                currency={asset.currency}
-                allocatedCost={form.allocatedCost}
-                onChange={(value) => patchField('allocatedCost', value)}
-              />
-            )}
-            {step === 'photos' && (
-              <PhotoStep
-                loading={attachments.isPending}
-                error={attachments.error?.message ?? null}
-                photos={photos}
-                newPhotos={newPhotos}
-                onPatch={(id, next) =>
-                  setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
-                }
-                onPatchNew={(id, next) =>
-                  setNewPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
-                }
-                onDelete={removeExisting}
-                onDeleteNew={removeNew}
-                onSetCover={selectCover}
-                onAdd={(files, source) => addFiles(files, 'photo', source)}
-              />
-            )}
-            {step === 'documents' && (
-              <DocStep
-                loading={attachments.isPending}
-                error={attachments.error?.message ?? null}
-                documents={documents}
-                newDocs={newDocs}
-                onPatch={(id, next) =>
-                  setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
-                }
-                onPatchNew={(id, next) =>
-                  setNewDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
-                }
-                onDelete={removeExisting}
-                onDeleteNew={removeNew}
-                onAdd={(files, source) => addFiles(files, 'document', source)}
-              />
-            )}
-            {step === 'review' && (
-              <ReviewStep
-                asset={asset}
-                form={form}
-                purchaseForm={purchaseForm}
-                photoCount={photos.length + newPhotos.length}
-                docCount={documents.length + newDocs.length}
-                addedCount={newPhotos.length + newDocs.length}
-                removedCount={deletedIds.current.size}
-              />
-            )}
-          </main>
-
-          {saveError && (
-            <p
-              role="alert"
-              className="rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950"
-            >
-              {saveError}
-            </p>
-          )}
-
-          <footer className="sticky-action-bar -mx-4 flex flex-wrap items-center gap-2 border-t border-slate-200 bg-white/95 px-4 pt-3 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 sm:mx-0 sm:rounded-xl sm:border">
-            <button
-              type="button"
-              disabled={stepIndex === 0 || saving}
-              className="interactive-muted rounded-lg px-4 font-medium disabled:opacity-30"
-              onClick={() => {
-                const previous = EDIT_STEPS[stepIndex - 1];
-                if (previous) setStep(previous.id);
-              }}
-            >
-              上一步
-            </button>
-            {step === 'review' ? (
-              <button
-                type="submit"
-                disabled={saving}
-                className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50 dark:hover:bg-teal-600"
-              >
-                {saving ? '正在儲存…' : '確認並儲存'}
-              </button>
-            ) : (
+        <fieldset disabled={saving} className="m-0 flex min-h-0 flex-1 flex-col border-0 p-0">
+          <header className="safe-area-header shrink-0 border-b border-slate-200 bg-white pb-3 dark:border-slate-800 dark:bg-slate-900">
+            <div className="mx-auto flex w-full max-w-4xl items-center gap-3">
               <button
                 type="button"
-                className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
+                disabled={saving}
+                onClick={onCancel}
+                className="interactive-muted -ml-2 shrink-0 rounded-lg px-2 text-sm font-medium disabled:opacity-30"
+              >
+                ← 取消
+              </button>
+              <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-600 dark:text-slate-300">
+                {asset.name}
+              </p>
+            </div>
+
+            <div className="mx-auto mt-2 w-full max-w-4xl">
+              <div className="flex items-baseline justify-between gap-3">
+                <h1 className="text-lg font-semibold tracking-tight">{assetEditStepLabel(step)}</h1>
+                <span className="shrink-0 text-xs text-slate-500 dark:text-slate-400">
+                  第 {stepIndex + 1}／{ASSET_EDIT_STEPS.length} 步
+                </span>
+              </div>
+              <div
+                role="progressbar"
+                aria-valuemin={1}
+                aria-valuemax={ASSET_EDIT_STEPS.length}
+                aria-valuenow={stepIndex + 1}
+                aria-label={`第 ${stepIndex + 1} 步，共 ${ASSET_EDIT_STEPS.length} 步：${assetEditStepLabel(step)}`}
+                className="mt-2 h-1 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700"
+              >
+                <div
+                  className="h-full rounded-full bg-accent motion-safe:transition-all"
+                  style={{ width: `${((stepIndex + 1) / ASSET_EDIT_STEPS.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          </header>
+
+          {/*
+            The only scrollable region, and only when a panel overflows. Eight
+            small steps rather than three dense ones is what keeps that rare.
+          */}
+          <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto">
+            <div className="safe-area-inline mx-auto w-full max-w-4xl py-4">
+              {step === 'transaction' && (
+                <TransactionStep asset={asset} form={purchaseForm} onChange={setPurchaseForm} />
+              )}
+              {step === 'description' && (
+                <DescriptionStep asset={asset} form={form} onChange={patchField} />
+              )}
+              {step === 'spec' && <SpecStep asset={asset} form={form} onChange={patchField} />}
+              {step === 'cost' && <CostStep asset={asset} form={form} onChange={patchField} />}
+              {step === 'custody' && <CustodyStep form={form} onChange={patchField} />}
+              {step === 'photos' && (
+                <PhotoStep
+                  loading={attachments.isPending}
+                  error={attachments.error?.message ?? null}
+                  photos={photos}
+                  newPhotos={newPhotos}
+                  onPatch={(id, next) =>
+                    setPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
+                  }
+                  onPatchNew={(id, next) =>
+                    setNewPhotos((prev) => prev.map((p) => (p.id === id ? { ...p, ...next } : p)))
+                  }
+                  onDelete={removeExisting}
+                  onDeleteNew={removeNew}
+                  onSetCover={selectCover}
+                  onAdd={(files, source) => addFiles(files, 'photo', source)}
+                />
+              )}
+              {step === 'documents' && (
+                <DocStep
+                  loading={attachments.isPending}
+                  error={attachments.error?.message ?? null}
+                  documents={documents}
+                  newDocs={newDocs}
+                  onPatch={(id, next) =>
+                    setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
+                  }
+                  onPatchNew={(id, next) =>
+                    setNewDocs((prev) => prev.map((d) => (d.id === id ? { ...d, ...next } : d)))
+                  }
+                  onDelete={removeExisting}
+                  onDeleteNew={removeNew}
+                  onAdd={(files, source) => addFiles(files, 'document', source)}
+                />
+              )}
+              {step === 'review' && (
+                <ReviewStep
+                  asset={asset}
+                  form={form}
+                  purchaseForm={purchaseForm}
+                  photoCount={photos.length + newPhotos.length}
+                  docCount={documents.length + newDocs.length}
+                  addedCount={newPhotos.length + newDocs.length}
+                  removedCount={deletedIds.current.size}
+                />
+              )}
+
+              {saveError && (
+                <p
+                  role="alert"
+                  className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-danger dark:bg-red-950"
+                >
+                  {saveError}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <footer className="shrink-0 border-t border-slate-200 bg-white pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3 dark:border-slate-800 dark:bg-slate-900">
+            <div className="safe-area-inline mx-auto flex w-full max-w-4xl items-center gap-2">
+              <button
+                type="button"
+                disabled={stepIndex === 0 || saving}
+                className="interactive-muted rounded-lg px-4 font-medium disabled:opacity-30"
                 onClick={() => {
-                  const next = EDIT_STEPS[stepIndex + 1];
-                  if (next) setStep(next.id);
+                  const previous = previousAssetEditStep(step);
+                  if (previous) onStep(previous);
                 }}
               >
-                下一步
+                上一步
               </button>
-            )}
-            <button
-              type="button"
-              disabled={saving}
-              className="interactive-muted rounded-lg px-3 text-sm font-medium disabled:opacity-30"
-              onClick={onCancel}
-            >
-              取消
-            </button>
+              {step === 'review' ? (
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50 dark:hover:bg-teal-600"
+                >
+                  {saving ? '正在儲存…' : '確認並儲存'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ml-auto rounded-lg bg-accent px-5 font-medium text-white shadow-sm hover:bg-teal-800 dark:hover:bg-teal-600"
+                  onClick={() => {
+                    const next = nextAssetEditStep(step);
+                    if (next) onStep(next);
+                  }}
+                >
+                  下一步
+                </button>
+              )}
+            </div>
           </footer>
         </fieldset>
       </form>
@@ -450,7 +454,6 @@ function TransactionStep({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-semibold">交易資訊</h2>
       {asset.purchase ? (
         <>
           <p className="text-sm text-slate-600 dark:text-slate-300">
@@ -533,7 +536,7 @@ function TransactionStep({
   );
 }
 
-function DetailsStep({
+function DescriptionStep({
   asset,
   form,
   onChange,
@@ -542,18 +545,15 @@ function DetailsStep({
   form: AssetEditForm;
   onChange: <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) => void;
 }) {
-  const linked = Boolean(asset.productDefinitionId);
-
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-semibold">商品資訊</h2>
-      {linked && (
+      {asset.productDefinitionId && (
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          這批庫存連結了商品規格。以下描述欄位預設沿用規格內容，改寫只會影響這一批，清空即可恢復沿用。
+          這批庫存連結了商品規格。以下欄位預設沿用規格內容，改寫只會影響這一批，清空即可恢復沿用。
         </p>
       )}
       <div className="surface rounded-xl p-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <OverrideField
             label="商品名稱"
             field="name"
@@ -585,7 +585,28 @@ function DetailsStep({
             form={form}
             onChange={onChange}
           />
+        </div>
+      </div>
+    </section>
+  );
+}
 
+function SpecStep({
+  asset,
+  form,
+  onChange,
+}: {
+  asset: HeldAssetListItem;
+  form: AssetEditForm;
+  onChange: <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) => void;
+}) {
+  return (
+    <section className="space-y-4">
+      <p className="text-sm text-slate-600 dark:text-slate-300">
+        重量與純度決定細重量，細重量決定估值，所以這裡的更正會一路傳到總覽。
+      </p>
+      <div className="surface rounded-xl p-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <EditField
             label="數量"
             type="number"
@@ -595,7 +616,17 @@ function DetailsStep({
             value={form.quantity}
             onChange={(value) => onChange('quantity', value)}
           />
-          <div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-2">
+          <EditField
+            label="純度"
+            type="number"
+            inputMode="decimal"
+            min="0"
+            max="1"
+            step="any"
+            value={form.purity}
+            onChange={(value) => onChange('purity', value)}
+          />
+          <div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-2 sm:col-span-2">
             <EditField
               label="單件重量"
               type="number"
@@ -621,16 +652,79 @@ function DetailsStep({
               }))}
             />
           </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CostStep({
+  asset,
+  form,
+  onChange,
+}: {
+  asset: HeldAssetListItem;
+  form: AssetEditForm;
+  onChange: <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) => void;
+}) {
+  const scope = currencyChangeScope(asset);
+  const changed = form.currency.trim().toUpperCase() !== asset.currency;
+
+  return (
+    <section className="space-y-4">
+      <div className="surface rounded-xl p-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <CustomSelect
+            label="幣別"
+            value={form.currency}
+            onChange={(value) => onChange('currency', value)}
+            options={COST_CURRENCIES.map((code) => ({ value: code, label: code }))}
+            hint={
+              scope === 'purchase'
+                ? '屬於整筆買入，同一筆交易的所有批次會一起改。'
+                : '這批庫存沒有對應的買入，幣別只影響這一批。'
+            }
+          />
           <EditField
-            label="純度"
+            label="分攤成本"
             type="number"
             inputMode="decimal"
             min="0"
-            max="1"
             step="any"
-            value={form.purity}
-            onChange={(value) => onChange('purity', value)}
+            value={form.allocatedCost}
+            onChange={(value) => onChange('allocatedCost', value)}
           />
+        </div>
+        <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+          更正持有成本，不影響原始入庫總額。
+        </p>
+      </div>
+
+      {changed && (
+        <p
+          role="status"
+          className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100"
+        >
+          幣別將由 {asset.currency} 改為 {form.currency.trim().toUpperCase()}。金額數字不會被換算
+          ——選錯幣別代表標籤錯了，數字本身是對的。
+          {scope === 'purchase' && '購入當下的行情快照會重新計算，溢價與熔值會在背景更新。'}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function CustodyStep({
+  form,
+  onChange,
+}: {
+  form: AssetEditForm;
+  onChange: <K extends keyof AssetEditForm>(key: K, value: AssetEditForm[K]) => void;
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="surface rounded-xl p-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <EditField
             label="序號"
             value={form.serial}
@@ -720,38 +814,6 @@ function OverrideField({
   );
 }
 
-function CostsStep({
-  currency,
-  allocatedCost,
-  onChange,
-}: {
-  currency: string;
-  allocatedCost: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <section className="space-y-4">
-      <h2 className="text-xl font-semibold">成本</h2>
-      <div className="surface rounded-xl p-4">
-        <div className="max-w-xs">
-          <EditField
-            label={`分攤成本 (${currency})`}
-            type="number"
-            inputMode="decimal"
-            min="0"
-            step="any"
-            value={allocatedCost}
-            onChange={onChange}
-          />
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            更正持有成本，不影響原始入庫總額。
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function PhotoStep({
   loading,
   error,
@@ -777,7 +839,6 @@ function PhotoStep({
 }) {
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-semibold">照片管理</h2>
       <p className="text-sm text-slate-600 dark:text-slate-300">
         新增或移除商品照片。主要照片會顯示在庫存清單中。
       </p>
@@ -871,7 +932,6 @@ function DocStep({
 }) {
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-semibold">文件</h2>
       <p className="text-sm text-slate-600 dark:text-slate-300">
         發票、收據與證書。標示「整筆交易」的文件由同一筆買入的所有批次共用，移除後其他批次也看不到。
       </p>
@@ -1255,7 +1315,6 @@ function ReviewStep({
 
   return (
     <section className="space-y-4">
-      <h2 className="text-xl font-semibold">確認變更</h2>
       {nothingChanged ? (
         <p className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
           未做任何變更。

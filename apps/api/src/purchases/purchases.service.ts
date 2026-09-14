@@ -130,15 +130,18 @@ export class PurchasesService {
       if (supplied === undefined) continue;
       data[field] = typeof supplied === 'string' && supplied.trim() ? supplied.trim() : null;
     }
+    const currency = dto.currency?.trim().toUpperCase();
+    if (currency !== undefined) data.currency = currency;
     if (Object.keys(data).length === 0) {
       throw new BadRequestException('No changes provided');
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const outcome = await this.prisma.$transaction(async (tx) => {
       const before = await tx.purchase.findUnique({
         where: { id },
         select: {
           id: true,
+          currency: true,
           dealerName: true,
           branch: true,
           orderNumber: true,
@@ -155,6 +158,20 @@ export class PurchasesService {
       }
 
       await tx.purchase.update({ where: { id }, data });
+
+      const currencyChanged = currency !== undefined && currency !== before.currency;
+      if (currencyChanged) {
+        // Every holding from this purchase carries a copy of the currency, and
+        // leaving them behind would read as a genuinely multi-currency ledger,
+        // which suppresses the dashboard's P&L (PRD §10.4).
+        await tx.asset.updateMany({ where: { purchaseId: id }, data: { currency } });
+        // The stored snapshot's per-gram price, intrinsic value and premium are
+        // all expressed in the old currency. They are not convertible after the
+        // fact — the FX rate that applied on the purchase date is what matters —
+        // so the row is dropped and recomputed from the provider history.
+        await tx.purchasePriceSnapshot.deleteMany({ where: { purchaseId: id } });
+      }
+
       await this.audit.recordInTransaction(tx, {
         ...auditContext,
         action: 'purchase.update',
@@ -163,10 +180,16 @@ export class PurchasesService {
         beforeSummary: before,
         afterSummary: { ...before, ...data },
       });
-      return id;
+      return { id, currencyChanged };
     });
 
-    return this.get(updated);
+    if (outcome.currencyChanged) {
+      // Outside the transaction: the relabel has already committed, and a
+      // Redis hiccup must not fail a write the user has been told succeeded.
+      await this.priceQueue?.requestPurchaseSnapshot(id);
+    }
+
+    return this.get(outcome.id);
   }
 
   async create(

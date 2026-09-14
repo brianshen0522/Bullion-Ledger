@@ -1,14 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { api, type HeldAssetListItem } from '../api.js';
 import { CustomSelect } from '../CustomSelect.js';
 import { productFormLabel } from '../product-forms.js';
 import { formatGrams, formatMoney } from '../units.js';
+import { AssetDetailScreen } from './AssetDetail.js';
 import { AssetDisposalDialog, type DisposalAction } from './AssetDisposalDialog.js';
 import { AssetEditWizard } from './AssetEditWizard.js';
 import { RowActionsMenu, type RowAction } from '../RowActionsMenu.js';
 import { assetPhotoReadPath, filterHeldAssets, heldUnitCount } from './assets-model.js';
+import {
+  FIRST_ASSET_EDIT_STEP,
+  readInventoryView,
+  sameInventoryView,
+  urlForInventoryView,
+  type AssetEditStep,
+  type InventoryView,
+} from './inventory-route.js';
 
 export function AssetsScreen({ onAddPurchase }: { onAddPurchase: () => void }) {
   const assets = useQuery<HeldAssetListItem[]>({
@@ -17,7 +26,27 @@ export function AssetsScreen({ onAddPurchase }: { onAddPurchase: () => void }) {
   });
   const [query, setQuery] = useState('');
   const [metalCode, setMetalCode] = useState('');
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [view, setView] = useState<InventoryView>(() => readInventoryView(window.location.search));
+  const [disposal, setDisposal] = useState<{ action: DisposalAction; assetId: string } | null>(
+    null,
+  );
+
+  // The open holding lives in the URL, so the browser's back button steps out
+  // of the editor and then out of the detail page, and a reload stays put.
+  const navigate = useCallback((next: InventoryView, mode: 'push' | 'replace' = 'push') => {
+    const url = urlForInventoryView(window.location.href, next);
+    const current = readInventoryView(window.location.search);
+    window.history[
+      sameInventoryView(current, next) || mode === 'replace' ? 'replaceState' : 'pushState'
+    ]({ ...(window.history.state as object | null) }, '', url);
+    setView(next);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => setView(readInventoryView(window.location.search));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   const allAssets = assets.data ?? [];
   const metalOptions = useMemo(
@@ -32,6 +61,17 @@ export function AssetsScreen({ onAddPurchase }: { onAddPurchase: () => void }) {
     [allAssets, metalCode, query],
   );
 
+  const openAsset =
+    view.kind === 'list' ? null : (allAssets.find((a) => a.id === view.assetId) ?? null);
+  const disposalAsset = allAssets.find((asset) => asset.id === disposal?.assetId) ?? null;
+
+  // A holding can disappear under an open detail or editor — sold in another
+  // tab, or a stale link. Fall back to the list rather than rendering nothing.
+  useEffect(() => {
+    if (view.kind !== 'list' && assets.isSuccess && !openAsset)
+      navigate({ kind: 'list' }, 'replace');
+  }, [assets.isSuccess, navigate, openAsset, view.kind]);
+
   if (assets.isPending) return <PageState message="正在讀取持有庫存…" />;
   if (assets.isError) {
     return (
@@ -39,6 +79,45 @@ export function AssetsScreen({ onAddPurchase }: { onAddPurchase: () => void }) {
         message={`無法讀取庫存：${assets.error.message}`}
         retry={() => void assets.refetch()}
       />
+    );
+  }
+
+  if (openAsset && view.kind === 'edit') {
+    return (
+      <AssetEditWizard
+        asset={openAsset}
+        step={view.step}
+        onStep={(step: AssetEditStep) => navigate({ kind: 'edit', assetId: openAsset.id, step })}
+        onDone={() => navigate({ kind: 'detail', assetId: openAsset.id }, 'replace')}
+        onCancel={() => navigate({ kind: 'detail', assetId: openAsset.id }, 'replace')}
+      />
+    );
+  }
+
+  if (openAsset && view.kind === 'detail') {
+    return (
+      <>
+        {disposal && disposalAsset && (
+          <AssetDisposalDialog
+            action={disposal.action}
+            target={disposalTarget(disposalAsset)}
+            onClose={() => setDisposal(null)}
+          />
+        )}
+        <AssetDetailScreen
+          asset={openAsset}
+          onBack={() => navigate({ kind: 'list' })}
+          onEdit={() =>
+            navigate({ kind: 'edit', assetId: openAsset.id, step: FIRST_ASSET_EDIT_STEP })
+          }
+          actions={assetActions(
+            openAsset,
+            (id) => navigate({ kind: 'edit', assetId: id, step: FIRST_ASSET_EDIT_STEP }),
+            setDisposal,
+            Boolean(disposal),
+          )}
+        />
+      </>
     );
   }
 
@@ -109,9 +188,11 @@ export function AssetsScreen({ onAddPurchase }: { onAddPurchase: () => void }) {
 
           <InventoryList
             assets={visibleAssets}
-            allAssets={allAssets}
-            editingId={editingId}
-            onEdit={(id) => setEditingId(id)}
+            disposal={disposal}
+            disposalAsset={disposalAsset}
+            onDispose={setDisposal}
+            onOpen={(id) => navigate({ kind: 'detail', assetId: id })}
+            onEdit={(id) => navigate({ kind: 'edit', assetId: id, step: FIRST_ASSET_EDIT_STEP })}
             isPending={false}
           />
 
@@ -138,66 +219,44 @@ export function AssetsScreen({ onAddPurchase }: { onAddPurchase: () => void }) {
 
 function InventoryList({
   assets,
-  allAssets,
-  editingId,
+  disposal,
+  disposalAsset,
+  onDispose,
+  onOpen,
   onEdit,
   isPending,
 }: {
   assets: readonly HeldAssetListItem[];
-  allAssets: readonly HeldAssetListItem[];
-  editingId: string | null;
-  onEdit: (id: string | null) => void;
+  disposal: { action: DisposalAction; assetId: string } | null;
+  disposalAsset: HeldAssetListItem | null;
+  onDispose: (disposal: { action: DisposalAction; assetId: string } | null) => void;
+  onOpen: (id: string) => void;
+  onEdit: (id: string) => void;
   isPending?: boolean;
 }) {
-  const editingAsset = allAssets.find((asset) => asset.id === editingId);
   const isDesktop = useMediaQuery('(min-width: 1024px)');
-  const [disposal, setDisposal] = useState<{ action: DisposalAction; assetId: string } | null>(
-    null,
-  );
-  const disposalAsset = allAssets.find((asset) => asset.id === disposal?.assetId);
-  const actionsDisabled = Boolean(isPending || editingId || disposal);
-
-  useEffect(() => {
-    if (editingId !== null && !editingAsset) onEdit(null);
-  }, [editingAsset, editingId, onEdit]);
+  const actionsDisabled = Boolean(isPending || disposal);
 
   return (
     <section aria-label="持有庫存清單" className="min-w-0 space-y-3">
       {disposal && disposalAsset && (
         <AssetDisposalDialog
           action={disposal.action}
-          target={{
-            id: disposalAsset.id,
-            name: disposalAsset.name,
-            quantity: disposalAsset.quantity,
-            allocatedCost: disposalAsset.allocatedCost,
-            currency: disposalAsset.currency,
-            version: disposalAsset.version,
-          }}
-          onClose={() => setDisposal(null)}
+          target={disposalTarget(disposalAsset)}
+          onClose={() => onDispose(null)}
         />
-      )}
-      {editingAsset && (
-        <div className="surface rounded-xl p-4">
-          <AssetEditWizard
-            asset={editingAsset}
-            onDone={() => onEdit(null)}
-            onCancel={() => onEdit(null)}
-          />
-        </div>
       )}
 
       {!isDesktop && assets.length > 0 && (
         <div className="space-y-3">
-          {assets
-            .filter((asset) => asset.id !== editingId)
-            .map((asset) => (
-              <MobileAssetCard
-                key={asset.id}
-                asset={asset}
-                actions={assetActions(asset, onEdit, setDisposal, actionsDisabled)}
-              />
-            ))}
+          {assets.map((asset) => (
+            <MobileAssetCard
+              key={asset.id}
+              asset={asset}
+              onOpen={() => onOpen(asset.id)}
+              actions={assetActions(asset, onEdit, onDispose, actionsDisabled)}
+            />
+          ))}
         </div>
       )}
 
@@ -230,13 +289,23 @@ function InventoryList({
               {assets.map((asset) => (
                 <tr
                   key={asset.id}
-                  className="border-t border-slate-200 align-middle dark:border-slate-700"
+                  className="border-t border-slate-200 align-middle hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60"
                 >
                   <td className="break-words p-3 [overflow-wrap:anywhere]">
                     <div className="flex min-w-0 items-center gap-3">
                       <AssetThumbnail asset={asset} size="desktop" />
                       <div className="min-w-0">
-                        <div className="font-medium">{asset.name}</div>
+                        {/*
+                          The name is the link into the holding. A whole-row
+                          click would swallow the actions menu inside it.
+                        */}
+                        <button
+                          type="button"
+                          onClick={() => onOpen(asset.id)}
+                          className="break-words text-left font-medium text-accent underline-offset-4 hover:underline dark:text-teal-400 [overflow-wrap:anywhere]"
+                        >
+                          {asset.name}
+                        </button>
                         <div className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
                           {asset.brand || '未設定品牌'}
                           {asset.serial ? ` · ${asset.serial}` : ''}
@@ -275,7 +344,7 @@ function InventoryList({
                   <td className="p-3 text-right">
                     <RowActionsMenu
                       label={`${asset.name} 的動作`}
-                      actions={assetActions(asset, onEdit, setDisposal, actionsDisabled)}
+                      actions={assetActions(asset, onEdit, onDispose, actionsDisabled)}
                     />
                   </td>
                 </tr>
@@ -286,6 +355,17 @@ function InventoryList({
       )}
     </section>
   );
+}
+
+function disposalTarget(asset: HeldAssetListItem) {
+  return {
+    id: asset.id,
+    name: asset.name,
+    quantity: asset.quantity,
+    allocatedCost: asset.allocatedCost,
+    currency: asset.currency,
+    version: asset.version,
+  };
 }
 
 /**
@@ -322,11 +402,31 @@ function assetActions(
   ];
 }
 
-function AssetHeading({ asset, actions }: { asset: HeldAssetListItem; actions?: RowAction[] }) {
+function AssetHeading({
+  asset,
+  actions,
+  onOpen,
+}: {
+  asset: HeldAssetListItem;
+  actions?: RowAction[];
+  onOpen?: () => void;
+}) {
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <h2 className="break-words font-semibold [overflow-wrap:anywhere]">{asset.name}</h2>
+        <h2 className="break-words font-semibold [overflow-wrap:anywhere]">
+          {onOpen ? (
+            <button
+              type="button"
+              onClick={onOpen}
+              className="text-left text-accent underline-offset-4 hover:underline dark:text-teal-400"
+            >
+              {asset.name}
+            </button>
+          ) : (
+            asset.name
+          )}
+        </h2>
         <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
           {asset.purchase?.dealerName || '未設定交易商'}
         </p>
@@ -344,13 +444,28 @@ function AssetHeading({ asset, actions }: { asset: HeldAssetListItem; actions?: 
   );
 }
 
-function MobileAssetCard({ asset, actions }: { asset: HeldAssetListItem; actions: RowAction[] }) {
+function MobileAssetCard({
+  asset,
+  actions,
+  onOpen,
+}: {
+  asset: HeldAssetListItem;
+  actions: RowAction[];
+  onOpen: () => void;
+}) {
   return (
     <article className="surface rounded-xl p-4">
       <div className="flex min-w-0 items-start gap-3">
-        <AssetThumbnail asset={asset} size="mobile" />
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`開啟 ${asset.name}`}
+          className="shrink-0 rounded-lg"
+        >
+          <AssetThumbnail asset={asset} size="mobile" />
+        </button>
         <div className="min-w-0 flex-1">
-          <AssetHeading asset={asset} actions={actions} />
+          <AssetHeading asset={asset} actions={actions} onOpen={onOpen} />
         </div>
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
@@ -377,6 +492,13 @@ function MobileAssetCard({ asset, actions }: { asset: HeldAssetListItem; actions
           />
         )}
       </dl>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mt-3 w-full rounded-lg border border-slate-200 text-sm font-medium text-accent dark:border-slate-700 dark:text-teal-400"
+      >
+        查看詳細資料
+      </button>
     </article>
   );
 }

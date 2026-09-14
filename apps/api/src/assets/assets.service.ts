@@ -53,6 +53,7 @@ export class AssetsService {
       dto.storageLocation === undefined &&
       dto.name === undefined &&
       dto.form === undefined &&
+      dto.currency === undefined &&
       dto.brand === undefined &&
       dto.country === undefined &&
       dto.yearOrVersion === undefined &&
@@ -153,6 +154,17 @@ export class AssetsService {
         data.allocatedCost = quantizeMoney(cost).toString();
       }
 
+      // Currency. A purchased lot follows its purchase, so relabelling it here
+      // would split one transaction across two currencies.
+      if (dto.currency !== undefined) {
+        if (before.purchaseId) {
+          throw new BadRequestException(
+            'This holding follows its purchase currency; change it on the purchase instead',
+          );
+        }
+        data.currency = dto.currency.trim().toUpperCase();
+      }
+
       // Serial / storage location.
       if (dto.serial !== undefined) data.serial = nullableString(dto.serial);
       if (dto.storageLocation !== undefined)
@@ -241,6 +253,7 @@ function summarizeAsset(asset: HeldAssetRecord | null) {
     allocatedCost: asset.allocatedCost.toFixed(),
     serial: asset.serial,
     storageLocation: asset.storageLocation,
+    currency: asset.currency,
     status: asset.status,
     nameOverride: asset.nameOverride,
     formOverride: asset.formOverride,

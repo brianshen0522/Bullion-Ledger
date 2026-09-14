@@ -8,7 +8,11 @@ export const OVERRIDABLE_FIELDS = ['name', 'form', 'brand', 'country', 'yearOrVe
 
 export type OverridableField = (typeof OVERRIDABLE_FIELDS)[number];
 
+/** Cost currencies offered in the editor. PRD §31 leaves the default open. */
+export const COST_CURRENCIES = ['TWD', 'USD', 'EUR', 'JPY'] as const;
+
 export interface AssetEditForm {
+  currency: string;
   name: string;
   form: string;
   brand: string;
@@ -36,6 +40,7 @@ export interface PurchaseEditForm {
 
 export function initialAssetForm(asset: HeldAssetListItem): AssetEditForm {
   return {
+    currency: asset.currency,
     name: asset.name ?? '',
     form: asset.form ?? '',
     brand: asset.brand ?? '',
@@ -136,6 +141,11 @@ export function buildAssetPatch(asset: HeldAssetListItem, form: AssetEditForm): 
   if (cost.isNegative()) return { error: '分攤成本不能是負數。' };
   if (cost.toFixed() !== asset.allocatedCost) patch.allocatedCost = cost.toFixed();
 
+  // A purchased lot follows its purchase's currency; buildPurchasePatch carries
+  // that change instead, so the whole transaction is relabelled at once.
+  const currency = form.currency.trim().toUpperCase();
+  if (!asset.purchase && currency !== asset.currency) patch.currency = currency;
+
   if (form.serial.trim() !== (asset.serial ?? '')) patch.serial = form.serial.trim() || null;
   if (form.storageLocation.trim() !== (asset.storageLocation ?? '')) {
     patch.storageLocation = form.storageLocation.trim() || null;
@@ -166,10 +176,14 @@ const PURCHASE_FIELDS = [
   'notes',
 ] as const;
 
-/** Transaction metadata diff. Empty object means nothing to send. */
+/**
+ * Transaction metadata diff, including the currency when the holding came from
+ * a purchase. Empty object means nothing to send.
+ */
 export function buildPurchasePatch(
   asset: HeldAssetListItem,
   form: PurchaseEditForm,
+  assetForm?: Pick<AssetEditForm, 'currency'>,
 ): Record<string, string | null> {
   const current = initialPurchaseForm(asset);
   const patch: Record<string, string | null> = {};
@@ -177,7 +191,19 @@ export function buildPurchasePatch(
     const next = form[field].trim();
     if (next !== current[field].trim()) patch[field] = next || null;
   }
+  if (assetForm && asset.purchase) {
+    const currency = assetForm.currency.trim().toUpperCase();
+    if (currency && currency !== asset.currency) patch.currency = currency;
+  }
   return patch;
+}
+
+/**
+ * What changing the currency does, in the user's terms. Amounts keep their
+ * digits: picking the wrong code mislabels figures that were already right.
+ */
+export function currencyChangeScope(asset: HeldAssetListItem): 'purchase' | 'asset' {
+  return asset.purchase ? 'purchase' : 'asset';
 }
 
 export interface AttachmentEdit {
