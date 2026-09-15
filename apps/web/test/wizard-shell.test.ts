@@ -95,6 +95,27 @@ describe('step jumper', () => {
   });
 });
 
+describe('keyboard and pointer conventions', () => {
+  const source = read('WizardShell.tsx');
+
+  it('leaves the wizard on Escape, as its sibling sheets already did', () => {
+    // A full-screen sheet that ignores Escape is a Mac-shaped gap: the
+    // disposal and gift sheets both close on it.
+    expect(source).toContain("event.key !== 'Escape'");
+    expect(source).toContain('onCancel()');
+  });
+
+  it('lets an open dropdown consume Escape first', () => {
+    // CustomSelect and SearchableSelect preventDefault on Escape while open,
+    // so honouring that flag is what stops one key closing both at once.
+    expect(source).toContain('event.defaultPrevented');
+  });
+
+  it('ignores Escape while a submission is in flight', () => {
+    expect(source).toContain("event.key !== 'Escape' || busy || event.defaultPrevented");
+  });
+});
+
 /**
  * Every multi-step flow shares this chrome. If one grows its own, the app ends
  * up with two answers to "where is the Next button" again.

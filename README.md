@@ -524,10 +524,27 @@ every safe-area inset the layout depends on. Focus-zoom and text inflation were
 already handled — every control is 16px under `any-pointer: coarse`, and
 `-webkit-text-size-adjust` is pinned at 100%.
 
-This is a deliberate accessibility trade-off (WCAG 1.4.4) that suits a
-single-user ledger. It also means asset photos cannot be pinched; exempting the
-gallery would be a `touch-action: auto` on the image plus skipping the gesture
-cancel inside it.
+All three are gated on a coarse pointer with touch points. macOS Safari sends
+the same `gesture*` events for a **trackpad** pinch, so an unconditional lock
+takes zoom away from the Mac app, where the viewport is large and a zoom is
+deliberate rather than a mis-touch.
+
+On a touch device this is a deliberate accessibility trade-off (WCAG 1.4.4)
+that suits a single-user ledger. It also means asset photos cannot be pinched
+there; exempting the gallery would be a `touch-action: auto` on the image plus
+skipping the gesture cancel inside it.
+
+### Desktop conventions
+
+The app is one layout across phone and Mac rather than two, so the desktop
+needs its own conventions checked rather than assumed:
+
+- Escape leaves a full-screen wizard, the way the disposal and gift sheets
+  already behaved. An open dropdown consumes Escape first — both selects
+  `preventDefault` on it while open — so one key never closes two things.
+- User-facing copy is Traditional Chinese throughout. The screens a Mac user
+  meets first (sign-in, first-run setup, the dashboard) were the last to be
+  translated, and a scan over `apps/web/src/**/*.tsx` is the check.
 
 ### Organization catalog
 

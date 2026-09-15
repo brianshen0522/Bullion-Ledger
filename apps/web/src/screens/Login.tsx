@@ -40,7 +40,7 @@ export function LoginScreen({ onDone }: { onDone: () => void | Promise<void> }) 
       await api.post('/auth/login', { username, password });
       await onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sign in failed.');
+      setError(e instanceof Error ? e.message : '登入失敗。');
       setSubmitting(false);
     }
   }
@@ -73,11 +73,11 @@ export function LoginScreen({ onDone }: { onDone: () => void | Promise<void> }) 
             <AppIcon className="h-12 w-12 shadow-sm" />
             <div>
               <p className="text-sm font-medium text-teal-700 dark:text-teal-400">Bullion Ledger</p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-tight">Sign in</h1>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight">登入</h1>
             </div>
           </div>
           <Field
-            label="Username"
+            label="使用者名稱"
             name="username"
             value={username}
             onChange={setUsername}
@@ -88,7 +88,7 @@ export function LoginScreen({ onDone }: { onDone: () => void | Promise<void> }) 
             required
           />
           <Field
-            label="Password"
+            label="密碼"
             name="password"
             type="password"
             value={password}
@@ -109,7 +109,7 @@ export function LoginScreen({ onDone }: { onDone: () => void | Promise<void> }) 
             disabled={submitting || passkeyBusy}
             className="w-full rounded-lg bg-accent px-4 py-2 font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50 dark:hover:bg-teal-600"
           >
-            {submitting ? 'Signing in…' : 'Sign in'}
+            {submitting ? '登入中…' : '登入'}
           </button>
 
           {passkeyOffered && (

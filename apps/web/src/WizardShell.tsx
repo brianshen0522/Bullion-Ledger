@@ -102,6 +102,19 @@ export function WizardShell({
     };
   }, []);
 
+  // Escape leaves the wizard, which is what a full-screen sheet is expected to
+  // do — the disposal and gift sheets already did. An open dropdown consumes
+  // Escape to close itself first and marks the event handled, so the wizard
+  // only acts on one that reached it untouched.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || busy || event.defaultPrevented) return;
+      onCancel();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [busy, onCancel]);
+
   return (
     <div className="fixed inset-0 z-50 flex h-dvh flex-col bg-paper dark:bg-slate-950">
       <form

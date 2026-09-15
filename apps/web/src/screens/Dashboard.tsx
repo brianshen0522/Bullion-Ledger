@@ -45,10 +45,9 @@ export function DashboardScreen() {
     },
   });
 
-  if (isLoading) return <State text="Loading dashboard…" />;
-  if (isError)
-    return <State text={`Failed to load dashboard: ${(error as Error).message}`} retry={refetch} />;
-  if (!data) return <State text="No dashboard data available." />;
+  if (isLoading) return <State text="正在讀取總覽…" />;
+  if (isError) return <State text={`無法讀取總覽：${(error as Error).message}`} retry={refetch} />;
+  if (!data) return <State text="目前沒有總覽資料。" />;
 
   // Keep a rolling deployment or stale development cache from passing an
   // unknown unit into Decimal conversion before the refreshed summary lands.
@@ -57,7 +56,7 @@ export function DashboardScreen() {
   return (
     <div className="min-w-0 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">總覽</h1>
         <div className="text-right">
           <UnitSwitcher
             value={unit}
@@ -79,18 +78,17 @@ export function DashboardScreen() {
 
       {empty && (
         <p className="text-sm text-slate-600 dark:text-slate-300">
-          No assets held yet. Create a product definition and record a purchase to see live data
-          here.
+          目前沒有持有庫存。建立商品規格並完成一筆入庫後，這裡就會顯示實際資料。
         </p>
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 lg:gap-4">
-        <Card label="Cost basis by currency" value={formatCurrencyCosts(data.costByCurrency)} />
-        <Card label="Asset lots held" value={String(data.heldAssetLots)} />
-        <Card label="Units held" value={String(data.heldAssetUnits)} />
-        <Card label="Purchases" value={String(data.purchaseCount)} />
+        <Card label="各幣別成本" value={formatCurrencyCosts(data.costByCurrency)} />
+        <Card label="持有批次" value={String(data.heldAssetLots)} />
+        <Card label="持有件數" value={String(data.heldAssetUnits)} />
+        <Card label="買入筆數" value={String(data.purchaseCount)} />
         <Card
-          label={`Intrinsic value (${data.valuationCurrency})`}
+          label={`內含價值（${data.valuationCurrency}）`}
           value={
             data.intrinsicValue === null
               ? '尚無行情'
@@ -99,7 +97,7 @@ export function DashboardScreen() {
           muted={data.intrinsicValue === null}
         />
         <Card
-          label={`Unrealized P&L (${data.valuationCurrency})`}
+          label={`未實現損益（${data.valuationCurrency}）`}
           value={
             data.unrealizedPnl === null
               ? '尚無法計算'
@@ -109,18 +107,18 @@ export function DashboardScreen() {
           tone={signTone(data.unrealizedPnl)}
         />
         <Card
-          label="Return rate"
+          label="報酬率"
           value={data.returnRate === null ? '—' : `${data.returnRate}%`}
           muted={data.returnRate === null}
           tone={signTone(data.returnRate)}
         />
         <Card
-          label="Premium paid"
+          label="已付溢價"
           value={describePremium(data, (amount, currency) => formatMoney(amount, currency))}
           muted={data.premiumPaid === null}
         />
         <Card
-          label="Held fine weight"
+          label="持有細重量"
           value={
             data.byMetal
               .map((m) => `${m.code}: ${formatGrams(m.fineWeightGrams, unit)}`)
@@ -161,12 +159,12 @@ export function DashboardScreen() {
 
       <section className="surface min-w-0 rounded-xl p-4" aria-labelledby="holding-breakdown">
         <h2 id="holding-breakdown" className="mb-3 font-medium">
-          Holding breakdown
+          持有明細
         </h2>
 
         <div className="space-y-3 sm:hidden">
           {data.byMetal.length === 0 && (
-            <p className="text-sm text-slate-500 dark:text-slate-400">No holdings.</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">尚無持有庫存。</p>
           )}
           {data.byMetal.map((metal) => (
             <article
@@ -175,14 +173,10 @@ export function DashboardScreen() {
             >
               <h3 className="font-semibold">{metal.code}</h3>
               <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                <Metric label="Fine weight" value={formatGrams(metal.fineWeightGrams, unit)} />
-                <Metric label="Lots" value={String(metal.heldAssetLots)} />
-                <Metric label="Units" value={metal.heldAssetUnits} />
-                <Metric
-                  label="Allocated cost"
-                  value={formatCurrencyCosts(metal.costByCurrency)}
-                  wide
-                />
+                <Metric label="細重量" value={formatGrams(metal.fineWeightGrams, unit)} />
+                <Metric label="批次" value={String(metal.heldAssetLots)} />
+                <Metric label="件數" value={metal.heldAssetUnits} />
+                <Metric label="分攤成本" value={formatCurrencyCosts(metal.costByCurrency)} wide />
               </dl>
             </article>
           ))}
@@ -193,19 +187,19 @@ export function DashboardScreen() {
             <thead className="text-left text-slate-500 dark:text-slate-400">
               <tr>
                 <th scope="col" className="w-[12%] py-2 pr-2">
-                  Metal
+                  金屬
                 </th>
                 <th scope="col" className="w-[26%] px-2">
-                  Fine weight ({WEIGHT_UNIT_LABELS[unit]})
+                  細重量（{WEIGHT_UNIT_LABELS[unit]}）
                 </th>
                 <th scope="col" className="w-[12%] px-2">
-                  Lots
+                  批次
                 </th>
                 <th scope="col" className="w-[15%] px-2">
-                  Units
+                  件數
                 </th>
                 <th scope="col" className="w-[35%] pl-2">
-                  Allocated cost by currency
+                  各幣別分攤成本
                 </th>
               </tr>
             </thead>
@@ -213,7 +207,7 @@ export function DashboardScreen() {
               {data.byMetal.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-3 text-slate-500 dark:text-slate-400">
-                    No holdings.
+                    尚無持有庫存。
                   </td>
                 </tr>
               )}

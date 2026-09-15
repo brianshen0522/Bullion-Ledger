@@ -46,10 +46,13 @@
   /*
    * Scroll in both directions, but decline pinch-zoom and double-tap-to-zoom.
    * `manipulation` would still permit a pinch; naming the pans is what rules
-   * it out. See zoom-lock.ts for the parts CSS cannot cover.
+   * it out. Touch screens only — a Mac keeps its trackpad zoom. See
+   * zoom-lock.ts for the parts CSS cannot cover.
    */
-  html {
-    touch-action: pan-x pan-y;
+  @media (any-pointer: coarse) {
+    html {
+      touch-action: pan-x pan-y;
+    }
   }
 
   html {

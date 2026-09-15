@@ -265,8 +265,13 @@ function ProductList({
                 </td>
                 <td className="p-3">{formatProductPurity(product.defaultPurity)}</td>
                 <td className="break-words p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span>{formatProductWeight(product)}</span>
+                  {/* The weight must be the part that wraps: the 編輯 button
+                      cannot shrink, so without min-w-0 the pair ran 3px past
+                      the cell in a narrow Mac window. */}
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                      {formatProductWeight(product)}
+                    </span>
                     <button
                       type="button"
                       onClick={() => onEdit(product.id)}

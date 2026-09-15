@@ -75,13 +75,13 @@ export default function App() {
     [navigateScreen, queryClient],
   );
 
-  if (loading) return <FullScreen message="Loading…" />;
+  if (loading) return <FullScreen message="載入中…" />;
   if (error) {
     return (
       <FullScreen
         message={
           online
-            ? `Health check failed: ${error.message}`
+            ? `無法連線到伺服器：${error.message}`
             : '目前離線。資料沒有被刪除；恢復網路後即可重新連線。'
         }
         actionLabel="重新整理"
@@ -105,16 +105,16 @@ export default function App() {
       <FullScreen
         message={
           online
-            ? `Session check failed: ${session.error.message}`
+            ? `無法確認登入狀態：${session.error.message}`
             : '目前離線。登入與資料同步需要網路連線。'
         }
-        actionLabel="Retry"
+        actionLabel="重試"
         onAction={() => void session.refetch()}
       />
     );
   }
   if (session.isPending || session.data === undefined) {
-    return <FullScreen message="Checking session…" />;
+    return <FullScreen message="正在確認登入狀態…" />;
   }
   if (!session.data?.username) {
     return (
@@ -122,7 +122,7 @@ export default function App() {
         onDone={async () => {
           const refreshed = await session.refetch();
           if (refreshed.error) throw refreshed.error;
-          if (!refreshed.data?.username) throw new Error('The server did not establish a session.');
+          if (!refreshed.data?.username) throw new Error('伺服器沒有建立登入工作階段。');
           navigateScreen('dashboard', 'replace');
         }}
       />

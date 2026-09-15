@@ -28,9 +28,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>,
 );
 
-// iOS Safari ignores user-scalable=no in a browser tab, so the meta tag alone
-// does not hold the app at 1x there.
-lockZoom(document);
+// Touch devices are pinned to 1x; a Mac keeps its trackpad zoom. iOS Safari
+// ignores user-scalable=no in a browser tab, so the meta tag alone is not
+// enough there either.
+lockZoom(window);
 
 // Development stays deterministic: Vite HMR and a service worker never
 // compete for module requests. Production registers a conservative shell and

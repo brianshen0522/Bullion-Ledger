@@ -17,7 +17,7 @@ export function InitScreen({ onDone }: { onDone: () => void }) {
       await api.post('/auth/init', { username, password });
       onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Initialization failed.');
+      setError(e instanceof Error ? e.message : '初始化失敗。');
       setSubmitting(false);
     }
   }
@@ -35,20 +35,15 @@ export function InitScreen({ onDone }: { onDone: () => void }) {
           <div className="flex items-center gap-3">
             <AppIcon className="h-12 w-12 shadow-sm" />
             <div>
-              <p className="text-sm font-medium text-teal-700 dark:text-teal-400">
-                First-time setup
-              </p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-                Initialize Bullion Ledger
-              </h1>
+              <p className="text-sm font-medium text-teal-700 dark:text-teal-400">首次設定</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight">初始化 Bullion Ledger</h1>
             </div>
           </div>
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            This creates the single owner account. The initialization screen will be disabled
-            afterwards.
+            這會建立唯一的擁有者帳號，完成後這個初始化畫面就會關閉。
           </p>
           <Field
-            label="Username (3-64 chars: A-Z a-z 0-9 . _ -)"
+            label="使用者名稱（3–64 字元：A-Z a-z 0-9 . _ -）"
             name="username"
             value={username}
             onChange={setUsername}
@@ -59,7 +54,7 @@ export function InitScreen({ onDone }: { onDone: () => void }) {
             required
           />
           <Field
-            label="Password"
+            label="密碼"
             name="password"
             type="password"
             value={password}
@@ -80,7 +75,7 @@ export function InitScreen({ onDone }: { onDone: () => void }) {
             disabled={submitting || username.length < 3 || password.length === 0}
             className="w-full rounded-lg bg-accent px-4 py-2 font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50 dark:hover:bg-teal-600"
           >
-            {submitting ? 'Creating…' : 'Create account'}
+            {submitting ? '建立中…' : '建立帳號'}
           </button>
         </form>
       </div>
