@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import App from './App.js';
 import { registerPwa } from './pwa.js';
+import { lockZoom } from './zoom-lock.js';
 import { ThemeProvider } from './ThemeProvider.js';
 import './index.css';
 
@@ -26,6 +27,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </ThemeProvider>
   </React.StrictMode>,
 );
+
+// iOS Safari ignores user-scalable=no in a browser tab, so the meta tag alone
+// does not hold the app at 1x there.
+lockZoom(document);
 
 // Development stays deterministic: Vite HMR and a service worker never
 // compete for module requests. Production registers a conservative shell and

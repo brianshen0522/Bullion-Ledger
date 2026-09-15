@@ -43,6 +43,15 @@
     min-height: 100%;
   }
 
+  /*
+   * Scroll in both directions, but decline pinch-zoom and double-tap-to-zoom.
+   * `manipulation` would still permit a pinch; naming the pans is what rules
+   * it out. See zoom-lock.ts for the parts CSS cannot cover.
+   */
+  html {
+    touch-action: pan-x pan-y;
+  }
+
   html {
     background-color: #f8fafc;
   }

@@ -509,6 +509,26 @@ scroll — content is silently clipped, which is why these need measuring.
 - A wizard title needs `basis-32`, not `flex-1` alone: a zero basis let the
   status pills beside it take the whole row and the title rendered at 0px.
 
+### Zoom lock
+
+The app is held at 1x on touch devices by three mechanisms, because no single
+one covers every browser: `maximum-scale=1, user-scalable=no` in the viewport
+meta (Chrome, and iOS once installed to the home screen); `touch-action:
+pan-x pan-y` on the document, which scrolls but declines pinch and
+double-tap-to-zoom (`manipulation` alone would still permit a pinch); and
+cancelling iOS Safari's proprietary `gesture*` events in `zoom-lock.ts`, since
+it has ignored `user-scalable=no` in a browser tab since iOS 10.
+
+`viewport-fit=cover` stays: dropping it letterboxes a notched phone and strips
+every safe-area inset the layout depends on. Focus-zoom and text inflation were
+already handled — every control is 16px under `any-pointer: coarse`, and
+`-webkit-text-size-adjust` is pinned at 100%.
+
+This is a deliberate accessibility trade-off (WCAG 1.4.4) that suits a
+single-user ledger. It also means asset photos cannot be pinched; exempting the
+gallery would be a `touch-action: auto` on the image plus skipping the gesture
+cancel inside it.
+
 ### Organization catalog
 
 Products and purchase snapshots distinguish `BRAND`, `ISSUER`, `REFINER`,
