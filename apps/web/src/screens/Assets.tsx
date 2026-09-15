@@ -412,9 +412,15 @@ function AssetHeading({
   onOpen?: () => void;
 }) {
   return (
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h2 className="break-words font-semibold [overflow-wrap:anywhere]">
+    /*
+      The metal badge and 持有中 used to sit in a fixed 98px column beside the
+      name. Together with the thumbnail that left the name 36px on a 320px
+      phone — a sliver, and it is the link into the holding. They are chips
+      under the name now, where they can wrap instead of squeezing it.
+    */
+    <div className="min-w-0">
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">
           {onOpen ? (
             <button
               type="button"
@@ -427,18 +433,20 @@ function AssetHeading({
             asset.name
           )}
         </h2>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {asset.purchase?.dealerName || '未設定交易商'}
-        </p>
+        {actions && (
+          <div className="shrink-0">
+            <RowActionsMenu label={`${asset.name} 的動作`} actions={actions} />
+          </div>
+        )}
       </div>
-      <div className="flex shrink-0 items-start gap-2">
-        <div className="flex flex-col items-end gap-1">
-          <span className="rounded-full bg-teal-50 px-2.5 py-1 text-xs font-semibold text-teal-800 dark:bg-teal-950 dark:text-teal-300">
-            {asset.metal.code}
-          </span>
-          <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">持有中</span>
-        </div>
-        {actions && <RowActionsMenu label={`${asset.name} 的動作`} actions={actions} />}
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-800 dark:bg-teal-950 dark:text-teal-300">
+          {asset.metal.code}
+        </span>
+        <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">持有中</span>
+        <span className="min-w-0 break-words text-xs text-slate-500 [overflow-wrap:anywhere] dark:text-slate-400">
+          {asset.purchase?.dealerName || '未設定交易商'}
+        </span>
       </div>
     </div>
   );
@@ -464,6 +472,7 @@ function MobileAssetCard({
         >
           <AssetThumbnail asset={asset} size="mobile" />
         </button>
+
         <div className="min-w-0 flex-1">
           <AssetHeading asset={asset} actions={actions} onOpen={onOpen} />
         </div>
@@ -526,7 +535,8 @@ function AssetThumbnail({ asset, size }: { asset: HeldAssetListItem; size: 'mobi
     retry: 1,
   });
   const [imageFailed, setImageFailed] = useState(false);
-  const dimensions = size === 'mobile' ? 'h-24 w-24' : 'h-16 w-16';
+  // 96px of thumbnail on a 320px card leaves too little for the name.
+  const dimensions = size === 'mobile' ? 'h-16 w-16 sm:h-24 sm:w-24' : 'h-16 w-16';
 
   useEffect(() => {
     setImageFailed(false);

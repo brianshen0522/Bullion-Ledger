@@ -191,8 +191,8 @@ function Shell({
   return (
     <div className="flex min-h-screen min-h-dvh min-w-0 flex-col">
       <header className="safe-area-header flex min-w-0 items-center gap-3 border-b border-slate-200 bg-white/95 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
-        <span className="flex min-w-0 items-center gap-2 whitespace-nowrap font-semibold tracking-tight">
-          <AppIcon className="h-8 w-8 shadow-sm" />
+        <span className="flex min-w-0 items-center gap-2 font-semibold tracking-tight">
+          <AppIcon className="h-8 w-8 shrink-0 shadow-sm" />
           <span className="truncate">Bullion Ledger</span>
         </span>
         {/* Phones get the bottom bar instead; putting seven destinations here
@@ -214,7 +214,7 @@ function Shell({
             </button>
           ))}
         </nav>
-        <div className="ml-auto flex min-w-0 items-center gap-1 sm:ml-0 sm:gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:ml-0 sm:gap-2">
           <button
             type="button"
             onClick={() => navigateScreen('settings')}
@@ -273,16 +273,25 @@ function MobileNav({
   return (
     <div className="sm:hidden">
       {overflowOpen && (
-        <>
-          <button
-            type="button"
-            aria-label="關閉選單"
-            className="fixed inset-0 z-30 h-full w-full cursor-default bg-slate-950/30"
-            onClick={onToggleOverflow}
-          />
+        <button
+          type="button"
+          aria-label="關閉選單"
+          className="fixed inset-0 z-30 h-full w-full cursor-default bg-slate-950/30"
+          onClick={onToggleOverflow}
+        />
+      )}
+      {/*
+        The sheet is a sibling stacked directly above the bar inside one fixed
+        container, rather than a separate fixed box offset by the bar's height.
+        Doing the arithmetic meant reproducing the home-indicator inset that the
+        bar adds itself, and getting it wrong left the last row — 設定 — behind
+        the bar on every phone with an indicator.
+      */}
+      <div className="fixed inset-x-0 bottom-0 z-40 flex flex-col">
+        {overflowOpen && (
           <div
             id="app-nav-overflow"
-            className="surface fixed inset-x-2 bottom-[calc(var(--app-bottom-nav)+0.5rem)] z-40 grid gap-1 rounded-2xl p-2 shadow-xl"
+            className="surface mx-2 mb-2 grid max-h-[60dvh] gap-1 overflow-y-auto overscroll-contain rounded-2xl p-2 shadow-xl"
           >
             {overflow.map((item) => (
               <button
@@ -298,46 +307,48 @@ function MobileNav({
               </button>
             ))}
           </div>
-        </>
-      )}
-      <nav
-        aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 gap-1 border-t border-slate-200 bg-white/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/95"
-      >
-        {primary.map((item) => (
+        )}
+        <nav
+          aria-label="Primary"
+          className="grid grid-cols-5 gap-1 border-t border-slate-200 bg-white/95 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/95"
+        >
+          {primary.map((item) => (
+            <button
+              type="button"
+              key={item.key}
+              onClick={() => navigateScreen(item.key)}
+              aria-current={screen === item.key ? 'page' : undefined}
+              className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-xs font-medium ${
+                screen === item.key
+                  ? 'text-accent dark:text-teal-300'
+                  : 'text-slate-500 dark:text-slate-400'
+              }`}
+            >
+              <span aria-hidden="true" className="text-base leading-none">
+                {NAV_GLYPHS[item.key]}
+              </span>
+              <span className="truncate">{item.shortLabel}</span>
+            </button>
+          ))}
           <button
             type="button"
-            key={item.key}
-            onClick={() => navigateScreen(item.key)}
-            aria-current={screen === item.key ? 'page' : undefined}
+            onClick={onToggleOverflow}
+            aria-expanded={overflowOpen}
+            aria-controls="app-nav-overflow"
+            aria-current={overflowActive ? 'page' : undefined}
             className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-xs font-medium ${
-              screen === item.key
+              overflowActive
                 ? 'text-accent dark:text-teal-300'
                 : 'text-slate-500 dark:text-slate-400'
             }`}
           >
             <span aria-hidden="true" className="text-base leading-none">
-              {NAV_GLYPHS[item.key]}
+              ☰
             </span>
-            <span className="truncate">{item.shortLabel}</span>
+            <span className="truncate">{overflowActive ? navLabel(screen) : '更多'}</span>
           </button>
-        ))}
-        <button
-          type="button"
-          onClick={onToggleOverflow}
-          aria-expanded={overflowOpen}
-          aria-controls="app-nav-overflow"
-          aria-current={overflowActive ? 'page' : undefined}
-          className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg text-xs font-medium ${
-            overflowActive ? 'text-accent dark:text-teal-300' : 'text-slate-500 dark:text-slate-400'
-          }`}
-        >
-          <span aria-hidden="true" className="text-base leading-none">
-            ☰
-          </span>
-          <span className="truncate">{overflowActive ? navLabel(screen) : '更多'}</span>
-        </button>
-      </nav>
+        </nav>
+      </div>
     </div>
   );
 }
@@ -388,12 +399,12 @@ function LogoutButton({ onLoggedOut }: { onLoggedOut: () => void }) {
               onLoggedOut();
               return;
             }
-            setError(requestError instanceof Error ? requestError.message : 'Sign out failed.');
+            setError(requestError instanceof Error ? requestError.message : '登出失敗。');
             setBusy(false);
           }
         }}
       >
-        {busy ? 'Signing out…' : 'Sign out'}
+        {busy ? '登出中…' : '登出'}
       </button>
       {error && (
         <p role="alert" className="text-danger text-xs">

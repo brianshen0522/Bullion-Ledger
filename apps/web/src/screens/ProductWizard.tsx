@@ -348,7 +348,7 @@ export function ProductWizard({
                 value={form.purity}
                 onChange={(value) => patch('purity', value)}
               />
-              <div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-2">
+              <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-[minmax(0,1fr)_9rem]">
                 <Field
                   label="單件重量"
                   type="number"

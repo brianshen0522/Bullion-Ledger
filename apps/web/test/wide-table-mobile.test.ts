@@ -49,18 +49,25 @@ describe('wide tables have a phone layout', () => {
   });
 });
 
-describe('wizard step strips fit a phone', () => {
-  it('wraps the purchase wizard strip instead of scrolling sideways', () => {
-    expect(wizard).toContain('grid-cols-3');
-    expect(wizard).not.toContain('min-w-[34rem]');
+describe('wizard steps are reachable on a phone', () => {
+  it('drops the button strips that needed a sideways scroll', () => {
+    for (const source of [wizard, read('screens/AssetEditWizard.tsx')]) {
+      expect(source).not.toContain('min-w-[34rem]');
+      expect(source).not.toContain('aria-label="入庫步驟"');
+    }
   });
 
-  it('replaces a full-screen wizard strip with a progress bar', () => {
-    // Eight steps will not fit as buttons on a phone at any wrap, so the shell
-    // names the current step and shows how far along it is.
-    const editor = read('screens/AssetEditWizard.tsx');
-    expect(editor).not.toContain('min-w-[34rem]');
-    expect(editor).toContain('stepLabel={assetEditStepLabel(step)}');
-    expect(read('WizardShell.tsx')).toContain('role="progressbar"');
+  it('names the current step and shows how far along it is', () => {
+    const shell = read('WizardShell.tsx');
+    expect(shell).toContain('role="progressbar"');
+    expect(read('screens/AssetEditWizard.tsx')).toContain('stepLabel={assetEditStepLabel(step)}');
+  });
+
+  it('offers a jump menu, because eight steps will not fit as buttons', () => {
+    expect(read('WizardShell.tsx')).toContain('label="跳至步驟"');
+    // The two long flows both opt in; short, strictly ordered creation does not
+    // need to.
+    expect(read('screens/AssetEditWizard.tsx')).toContain('steps={ASSET_EDIT_STEPS}');
+    expect(wizard).toContain('onStepSelect=');
   });
 });

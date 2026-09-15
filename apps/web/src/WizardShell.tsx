@@ -1,5 +1,14 @@
 import { useEffect, useRef, type FormEvent, type ReactNode } from 'react';
 
+import { CustomSelect } from './CustomSelect.js';
+
+export interface WizardShellStep {
+  id: string;
+  label: string;
+  /** A step the flow has not opened up yet; listed but not selectable. */
+  disabled?: boolean;
+}
+
 export interface WizardShellProps {
   /** Small line above the title: which flow this is. */
   eyebrow: string;
@@ -25,6 +34,15 @@ export interface WizardShellProps {
   onSubmit?: (event: FormEvent) => void;
   /** The body scrolls back to its top whenever this changes. */
   scrollKey?: string;
+  /**
+   * Every step, so the user can jump straight to one. Omit for a flow where
+   * only Back and Next make sense. Eight steps do not fit a phone as a button
+   * strip, so this renders as a menu.
+   */
+  steps?: readonly WizardShellStep[];
+  onStepSelect?: (id: string) => void;
+  /** Which of `steps` is open. Defaults to the one at `stepIndex`. */
+  currentStepId?: string;
   children: ReactNode;
 }
 
@@ -54,8 +72,12 @@ export function WizardShell({
   busy = false,
   onSubmit,
   scrollKey,
+  steps,
+  onStepSelect,
+  currentStepId,
   children,
 }: WizardShellProps) {
+  const activeStepId = currentStepId ?? steps?.[stepIndex]?.id ?? '';
   const formRef = useRef<HTMLFormElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -97,7 +119,7 @@ export function WizardShell({
             data-wizard-top
             className="safe-area-header shrink-0 border-b border-slate-200 bg-white pb-3 dark:border-slate-800 dark:bg-slate-900"
           >
-            <div className="mx-auto flex w-full max-w-4xl items-center gap-3">
+            <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center gap-x-3 gap-y-1">
               <button
                 type="button"
                 disabled={busy}
@@ -106,10 +128,19 @@ export function WizardShell({
               >
                 ← {cancelLabel}
               </button>
-              <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-600 dark:text-slate-300">
+              {/*
+                basis-32 rather than flex-1 alone: with a zero basis the title
+                loses every pixel to whatever sits beside it, and a wizard that
+                does not say what you are editing is worse than a wrapped row.
+              */}
+              <p className="min-w-0 flex-1 basis-32 truncate text-sm font-medium text-slate-600 dark:text-slate-300">
                 {subject ?? eyebrow}
               </p>
-              {headerAside}
+              {/*
+                Allowed to shrink and wrap: pinning it made the status pills
+                overflow a 320px row, which is worse than letting them fold.
+              */}
+              {headerAside && <div className="min-w-0 max-w-full">{headerAside}</div>}
             </div>
 
             <div className="mx-auto mt-2 w-full max-w-4xl">
@@ -132,6 +163,24 @@ export function WizardShell({
                   style={{ width: `${((stepIndex + 1) / stepCount) * 100}%` }}
                 />
               </div>
+
+              {steps && onStepSelect && (
+                <div className="mt-2 sm:max-w-xs sm:ml-auto">
+                  <CustomSelect
+                    label="跳至步驟"
+                    hideLabel
+                    compact
+                    value={activeStepId}
+                    onChange={onStepSelect}
+                    options={steps.map((entry, index) => ({
+                      value: entry.id,
+                      label: `${index + 1}. ${entry.label}`,
+                      disabled: entry.disabled,
+                      description: entry.disabled ? '尚未開放' : undefined,
+                    }))}
+                  />
+                </div>
+              )}
             </div>
           </header>
 

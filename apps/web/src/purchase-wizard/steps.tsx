@@ -80,7 +80,7 @@ export function TransactionStep({ value, issues, onChange }: TransactionStepProp
         </p>
       </div>
       <WizardErrorSummary issues={issues} />
-      <div className="surface grid min-w-0 gap-4 rounded-xl p-4 sm:grid-cols-2">
+      <div className="surface grid min-w-0 gap-4 rounded-xl p-3 sm:grid-cols-2 sm:p-4">
         <WizardField
           label="購買日期與時間"
           path="transaction.purchasedAt"

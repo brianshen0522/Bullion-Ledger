@@ -326,14 +326,14 @@ function GiftInForm({ onDone }: { onDone: () => void }) {
       role="dialog"
       aria-modal="true"
       aria-labelledby="gift-in-title"
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-2 pt-4 sm:px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onDone();
       }}
     >
       <form
         onSubmit={handleSubmit}
-        className="surface max-h-[90dvh] w-full max-w-2xl space-y-4 overflow-y-auto overscroll-contain rounded-2xl p-5"
+        className="surface max-h-[90dvh] w-full max-w-2xl space-y-4 overflow-y-auto overscroll-contain rounded-2xl p-4 sm:p-5"
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">

@@ -242,12 +242,12 @@ export function AssetDisposalDialog({
       aria-describedby={descriptionId}
       onKeyDown={handleDialogKeyDown}
       onPointerDown={handleBackdropPointerDown}
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 px-2 pt-4 sm:px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:items-center"
     >
       <form
         noValidate
         onSubmit={handleSubmit}
-        className="surface max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto overscroll-contain rounded-2xl p-5"
+        className="surface max-h-[90dvh] w-full max-w-lg space-y-4 overflow-y-auto overscroll-contain rounded-2xl p-4 sm:p-5"
       >
         <div>
           <h2 ref={titleRef} id={titleId} tabIndex={-1} className="text-lg font-semibold">

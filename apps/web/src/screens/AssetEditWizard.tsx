@@ -33,6 +33,7 @@ import {
   ASSET_EDIT_STEPS,
   assetEditStepIndex,
   assetEditStepLabel,
+  isAssetEditStep,
   nextAssetEditStep,
   previousAssetEditStep,
   type AssetEditStep,
@@ -259,6 +260,13 @@ export function AssetEditWizard({ asset, step, onStep, onDone, onCancel }: Asset
       stepIndex={stepIndex}
       stepCount={ASSET_EDIT_STEPS.length}
       scrollKey={step}
+      // Editing is not a linear wizard: every section already holds data, so
+      // all of them are reachable directly, in any order.
+      steps={ASSET_EDIT_STEPS}
+      currentStepId={step}
+      onStepSelect={(next) => {
+        if (isAssetEditStep(next)) onStep(next);
+      }}
       busy={saving}
       onCancel={onCancel}
       onSubmit={() => {
@@ -546,7 +554,7 @@ function SpecStep({
             value={form.purity}
             onChange={(value) => onChange('purity', value)}
           />
-          <div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-2 sm:col-span-2">
+          <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-[minmax(0,1fr)_9rem] sm:col-span-2">
             <EditField
               label="單件重量"
               type="number"

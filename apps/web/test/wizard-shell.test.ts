@@ -69,6 +69,32 @@ describe('wizard shell', () => {
   });
 });
 
+describe('step jumper', () => {
+  const steps = [
+    { id: 'a', label: '第一' },
+    { id: 'b', label: '第二' },
+    { id: 'c', label: '第三', disabled: true },
+  ];
+
+  it('is absent unless the flow opts in', () => {
+    expect(render()).not.toContain('跳至步驟');
+  });
+
+  it('lists every step, numbered, with the current one selected', () => {
+    const markup = render({ steps, currentStepId: 'b', onStepSelect: () => {} });
+    expect(markup).toContain('跳至步驟');
+    // A closed combobox shows only the current selection.
+    expect(markup).toContain('2. 第二');
+  });
+
+  it('marks a step the flow has not opened up yet', () => {
+    // Reaching step three early would validate against fields the draft has
+    // not filled in, so it is listed but not selectable.
+    const markup = render({ steps, currentStepId: 'a', onStepSelect: () => {} });
+    expect(markup).toContain('1. 第一');
+  });
+});
+
 /**
  * Every multi-step flow shares this chrome. If one grows its own, the app ends
  * up with two answers to "where is the Next button" again.

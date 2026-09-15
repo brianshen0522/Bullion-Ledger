@@ -490,6 +490,25 @@ the user has not reached yet is how a wizard traps someone with no way forward.
 收到贈與 is a bottom sheet with the same shape as the disposal dialog rather
 than a nine-field form pushing 異動紀錄 off the screen.
 
+### Phone layout
+
+Checked by measuring the running app at 320/360/390px, not by reading CSS.
+`body` is `overflow-x: hidden`, so overflow here never shows as a sideways
+scroll — content is silently clipped, which is why these need measuring.
+
+- `--app-gutter` (1rem, 0.75rem below 380px) feeds every page gutter. A date
+  control sizes itself from its locale's format and iOS Safari will not shrink
+  one below that; in zh-TW the value is long enough that the three date fields
+  in the app had 5px, 0px and -1px of room at 320px. They also carry
+  `-webkit-appearance: none` plus `::-webkit-date-and-time-value { min-width: 0 }`,
+  without which the value element re-inflates the control.
+- The tab bar's overflow sheet is a sibling stacked above the bar inside one
+  fixed container rather than a box offset by `--app-bottom-nav`. That variable
+  is the bar's content height and excludes the home indicator the bar adds
+  itself, so offsetting by it hid the sheet's last row behind the bar.
+- A wizard title needs `basis-32`, not `flex-1` alone: a zero basis let the
+  status pills beside it take the whole row and the title rendered at 0px.
+
 ### Organization catalog
 
 Products and purchase snapshots distinguish `BRAND`, `ISSUER`, `REFINER`,

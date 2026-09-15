@@ -232,6 +232,19 @@ export function PurchaseWizard({
       stepIndex={currentIndex}
       stepCount={PURCHASE_WIZARD_STEPS.length}
       scrollKey={draft.currentStep}
+      // Unlike editing, a new purchase gates its steps: a later step's
+      // validation depends on the earlier ones, so only what the draft has
+      // already reached is selectable.
+      steps={PURCHASE_WIZARD_STEPS.map((step, index) => ({
+        id: step.id,
+        label: step.label,
+        disabled: index > furthestIndex,
+      }))}
+      currentStepId={draft.currentStep}
+      onStepSelect={(next) => {
+        const target = PURCHASE_WIZARD_STEPS.find(({ id }) => id === next);
+        if (target && wizardStepIndex(target.id) <= furthestIndex) navigate(target.id);
+      }}
       busy={finalizing}
       cancelLabel={onCancel ? '先離開' : '取消'}
       onCancel={() => onCancel?.()}
@@ -286,38 +299,6 @@ export function PurchaseWizard({
         </>
       }
     >
-      {/*
-        Steps stay reachable out of order only as far as the draft has already
-        been taken: a later step's validation depends on the earlier ones.
-      */}
-      <nav className="mb-4" aria-label="入庫步驟">
-        <ol className="grid grid-cols-3 gap-1 sm:grid-cols-6">
-          {PURCHASE_WIZARD_STEPS.map((step, index) => {
-            const reached = index <= furthestIndex;
-            return (
-              <li key={step.id}>
-                <button
-                  type="button"
-                  aria-current={draft.currentStep === step.id ? 'step' : undefined}
-                  aria-disabled={!reached}
-                  disabled={!reached}
-                  className={`min-h-11 w-full rounded-lg px-1 text-xs font-medium motion-safe:transition-colors ${
-                    draft.currentStep === step.id
-                      ? 'bg-accent text-white shadow-sm'
-                      : reached
-                        ? 'interactive-muted bg-slate-100 dark:bg-slate-800'
-                        : 'bg-slate-100 text-slate-400 opacity-60 dark:bg-slate-900 dark:text-slate-600'
-                  }`}
-                  onClick={() => reached && navigate(step.id)}
-                >
-                  {step.shortLabel}
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-      </nav>
-
       {draft.currentStep === 'transaction' ? (
         <TransactionStep
           value={draft.transaction}
@@ -424,7 +405,7 @@ function SaveStatus({
   systemSavedAt: string | null;
 }) {
   return (
-    <div className="flex flex-wrap justify-end gap-1 text-xs" aria-live="polite">
+    <div className="flex min-w-0 flex-wrap justify-end gap-1 text-xs" aria-live="polite">
       <SavePill
         label="此裝置"
         state={localState}
