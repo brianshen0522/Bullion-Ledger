@@ -441,7 +441,7 @@ export class AttachmentsService {
       include: ATTACHMENT_INCLUDE,
     });
     if (replay && replay.assetId === input.assetId) {
-      return presentAttachment(replay);
+      return this.resolveAssetUploadReplay(replay, uploadRequestHash);
     }
 
     const storageKey = buildAssetStorageKey(input.userId, input.assetId, filename);
@@ -537,7 +537,9 @@ export class AttachmentsService {
           where: { uploadKeyHash },
           include: ATTACHMENT_INCLUDE,
         });
-        if (winner && winner.assetId === input.assetId) return presentAttachment(winner);
+        if (winner && winner.assetId === input.assetId) {
+          return this.resolveAssetUploadReplay(winner, uploadRequestHash);
+        }
       }
       throw error;
     }
@@ -646,22 +648,26 @@ export class AttachmentsService {
         });
         this.assertDerivativeQuota(usage._count._all, usage._sum.sizeBytes ?? 0, bytes.byteLength);
 
-        const intakeOriginalUsage = await tx.attachment.aggregate({
-          where: { intakeId: attachment.intakeId },
-          _sum: { sizeBytes: true },
-        });
-        const intakeDerivativeUsage = await tx.attachmentVariant.aggregate({
-          where: {
-            attachment: { intakeId: attachment.intakeId },
-            kind: { not: AttachmentVariantKind.ORIGINAL },
-          },
-          _sum: { sizeBytes: true },
-        });
-        this.assertIntakeStorageQuota(
-          intakeOriginalUsage._sum.sizeBytes ?? 0,
-          intakeDerivativeUsage._sum.sizeBytes ?? 0,
-          bytes.byteLength,
-        );
+        // A finalized attachment has no intake, and filtering on a null intakeId
+        // would total every finalized file in the ledger against this quota.
+        if (scope.kind === 'intake') {
+          const intakeOriginalUsage = await tx.attachment.aggregate({
+            where: { intakeId: scope.intakeId },
+            _sum: { sizeBytes: true },
+          });
+          const intakeDerivativeUsage = await tx.attachmentVariant.aggregate({
+            where: {
+              attachment: { intakeId: scope.intakeId },
+              kind: { not: AttachmentVariantKind.ORIGINAL },
+            },
+            _sum: { sizeBytes: true },
+          });
+          this.assertIntakeStorageQuota(
+            intakeOriginalUsage._sum.sizeBytes ?? 0,
+            intakeDerivativeUsage._sum.sizeBytes ?? 0,
+            bytes.byteLength,
+          );
+        }
 
         const latest = await tx.attachmentVariant.findFirst({
           where: { attachmentId, kind },
@@ -960,6 +966,13 @@ export class AttachmentsService {
       attachment.intakeId !== input.intakeId ||
       attachment.uploadRequestHash !== requestHash
     ) {
+      throw new ConflictException('Idempotency-Key was already used for a different upload');
+    }
+    return presentAttachment(attachment);
+  }
+
+  private resolveAssetUploadReplay(attachment: AttachmentWithVariants, requestHash: string) {
+    if (attachment.uploadRequestHash !== requestHash) {
       throw new ConflictException('Idempotency-Key was already used for a different upload');
     }
     return presentAttachment(attachment);

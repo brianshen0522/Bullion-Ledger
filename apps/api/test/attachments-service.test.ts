@@ -705,6 +705,80 @@ describe('AttachmentsService', () => {
   });
 });
 
+describe('AttachmentsService after finalization', () => {
+  const metadata = { kind: 'front', mediaClass: 'ASSET_PHOTO', captureSource: 'LIBRARY' };
+
+  function build() {
+    const tx = {
+      attachment: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        aggregate: vi.fn(),
+        findUnique: vi.fn().mockResolvedValue({ version: 2 }),
+      },
+      attachmentVariant: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        aggregate: vi.fn().mockResolvedValue({ _count: { _all: 0 }, _sum: { sizeBytes: 0 } }),
+        create: vi.fn().mockResolvedValue({ id: 'variant-2', kind: 'CROPPED', revision: 1 }),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (work: (client: typeof tx) => Promise<unknown>) => work(tx)),
+      asset: { findUnique: vi.fn().mockResolvedValue({ id: 'asset-1', status: 'HELD' }) },
+      attachment: { findUnique: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      attachmentVariant: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const service = new AttachmentsService(
+      prisma as never,
+      { putObject: vi.fn(), deleteObject: vi.fn() } as never,
+      { recordInTransaction: vi.fn() } as never,
+      { get: vi.fn() } as never,
+    );
+    return { service, prisma, tx };
+  }
+
+  it('does not charge a holding derivative against an intake quota', async () => {
+    const { service, prisma, tx } = build();
+    prisma.attachment.findUnique.mockResolvedValue({
+      id: 'attachment-1',
+      version: 1,
+      intakeId: null,
+      purchaseId: null,
+      assetId: 'asset-1',
+      deletedAt: null,
+      mediaClass: 'ASSET_PHOTO',
+      uploadedById: 'user-1',
+      intake: null,
+      variants: [],
+    });
+
+    await service.uploadVariant('user-1', 'attachment-1', 'CROPPED' as never, 'image/png', png());
+
+    expect(tx.attachment.aggregate).not.toHaveBeenCalled();
+    expect(tx.attachmentVariant.create).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an Idempotency-Key reused for a different holding upload', async () => {
+    const { service, prisma } = build();
+    prisma.attachment.findUnique.mockResolvedValue({
+      assetId: 'asset-1',
+      uploadRequestHash: 'digest-of-another-file',
+      variants: [],
+    });
+
+    await expect(
+      service.uploadForAsset({
+        assetId: 'asset-1',
+        userId: 'user-1',
+        filename: 'gold.png',
+        declaredMime: 'image/png',
+        idempotencyKey: 'asset-upload-key',
+        bytes: png(),
+        metadata: metadata as never,
+      }),
+    ).rejects.toThrow(/different upload/);
+  });
+});
+
 describe('AttachmentsService listForAsset', () => {
   function assetHarness(asset: { id: string; status: string; purchaseId: string | null } | null) {
     const findMany = vi.fn().mockResolvedValue([]);
