@@ -49,6 +49,18 @@ describe('LoginThrottleService', () => {
     expect(() => s.consume('alice')).not.toThrow();
   });
 
+  it('keeps a live lockout when the bucket store is full', () => {
+    const s = makeService(1, 60);
+    s.consume('alice');
+    s.recordFailure('alice');
+    for (let i = 0; i < 10_001; i++) {
+      s.consume(`user-${i}`);
+      s.release(`user-${i}`);
+      s.consume(`user-${i}`);
+    }
+    expect(() => s.consume('alice')).toThrow(LockedError);
+  });
+
   it('isolates usernames', () => {
     const s = makeService(2, 60);
     s.consume('alice');

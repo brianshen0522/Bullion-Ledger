@@ -150,6 +150,13 @@ export class LoginThrottleService {
 
   private makeRoom(): void {
     if (this.store.size < MAX_BUCKETS) return;
+    // Evicting a live lockout would let a flood of new keys lift it early.
+    for (const [key, rec] of this.store) {
+      if (!rec.lockedUntil) {
+        this.store.delete(key);
+        return;
+      }
+    }
     const oldestKey = this.store.keys().next().value as string | undefined;
     if (oldestKey !== undefined) this.store.delete(oldestKey);
   }
