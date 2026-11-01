@@ -33,6 +33,16 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: aws.getSignedUrl
 
 import { StorageService } from '../src/storage/storage.service';
 
+function signingService(): StorageService {
+  const values: Record<string, string> = {
+    MINIO_INTERNAL_ENDPOINT: 'http://minio:9000',
+    MINIO_PUBLIC_ENDPOINT: 'https://objects.example.test',
+    MINIO_ACCESS_KEY: 'service-user',
+    MINIO_SECRET_KEY: 'service-secret',
+  };
+  return new StorageService({ get: (key: string) => values[key] } as never);
+}
+
 describe('StorageService endpoint separation', () => {
   beforeEach(() => {
     aws.clients.length = 0;
@@ -73,5 +83,27 @@ describe('StorageService endpoint separation', () => {
       { expiresIn: 300 },
     );
     expect(result.expiresInSeconds).toBe(300);
+  });
+
+  it('never serves a stored type outside the upload allow-list inline', async () => {
+    const service = signingService();
+    await service.onModuleInit();
+
+    await service.issueReadUrl('assets/u/a/file', { filename: 'x.html', mime: 'text/html' });
+
+    const input = aws.getSignedUrl.mock.calls[0]![1].input;
+    expect(input.ResponseContentType).toBe('application/octet-stream');
+    expect(input.ResponseContentDisposition).toMatch(/^attachment;/);
+  });
+
+  it('keeps inline previews for allow-listed types', async () => {
+    const service = signingService();
+    await service.onModuleInit();
+
+    await service.issueReadUrl('assets/u/a/file', { filename: 'x.pdf', mime: 'application/pdf' });
+
+    const input = aws.getSignedUrl.mock.calls[0]![1].input;
+    expect(input.ResponseContentType).toBe('application/pdf');
+    expect(input.ResponseContentDisposition).toMatch(/^inline;/);
   });
 });

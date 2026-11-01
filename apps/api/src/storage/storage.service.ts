@@ -25,6 +25,16 @@ interface StorageConfig {
 
 const DEFAULT_TTL = 5 * 60; // 5 min, per PRD §14.3 "短效 signed URL"
 
+/** The types file-validation can produce. Anything else is never rendered. */
+const INLINE_SAFE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  'application/pdf',
+]);
+
 /**
  * S3-compatible private bucket boundary backed by MinIO. The bucket is
  * created on boot if missing and is never set to public-read. Signed URLs
@@ -129,16 +139,24 @@ export class StorageService implements OnModuleInit {
     opts: { filename?: string; mime?: string; download?: boolean } = {},
   ): Promise<{ url: string; expiresInSeconds: number }> {
     if (!this.publicClient) throw new Error('Storage unavailable');
+    // Rows normally hold a sniffed type, but a restored archive can say anything,
+    // and this bucket is served from the app's own origin.
+    const mime = opts.mime?.toLowerCase();
+    const inlineSafe = mime !== undefined && INLINE_SAFE_MIMES.has(mime);
     const command = new GetObjectCommand({
       Bucket: this.config.bucket,
       Key: storageKey,
       ResponseCacheControl: 'private, no-store',
-      ...(opts.mime ? { ResponseContentType: opts.mime } : {}),
+      ...(opts.mime
+        ? { ResponseContentType: inlineSafe ? opts.mime : 'application/octet-stream' }
+        : {}),
       ...(opts.filename
         ? {
             ResponseContentDisposition: contentDisposition(
               opts.filename,
-              opts.download === true ? 'attachment' : 'inline',
+              opts.download === true || (opts.mime !== undefined && !inlineSafe)
+                ? 'attachment'
+                : 'inline',
             ),
           }
         : {}),
