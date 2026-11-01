@@ -5,8 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
 
 import { AppModule } from './app.module.js';
+import { parseLimitMb, registerBackupBodyParser } from './backup/backup.module.js';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { requestIdMiddleware } from './common/middleware/request-id.middleware.js';
+import { responseHeadersMiddleware } from './common/middleware/response-headers.middleware.js';
 import { loadRuntimeConfig } from './config/runtime.config.js';
 
 async function bootstrap(): Promise<void> {
@@ -20,11 +22,18 @@ async function bootstrap(): Promise<void> {
   const apiPrefix = config.get<string>('API_PREFIX') ?? 'api';
 
   app.setGlobalPrefix(apiPrefix);
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
   if (runtime.trustedProxyHops > 0) {
     app.getHttpAdapter().getInstance().set('trust proxy', runtime.trustedProxyHops);
   }
   app.use(cookieParser());
   app.use(requestIdMiddleware);
+  app.use(responseHeadersMiddleware);
+  registerBackupBodyParser(
+    app,
+    apiPrefix,
+    parseLimitMb(config.get<string>('BACKUP_MAX_UPLOAD_MB')),
+  );
   app.enableCors({
     origin: runtime.webOrigin,
     credentials: true,

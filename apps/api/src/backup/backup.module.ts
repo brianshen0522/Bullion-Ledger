@@ -1,6 +1,5 @@
-import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import express from 'express';
+import { INestApplication, Module } from '@nestjs/common';
+import express, { type RequestHandler } from 'express';
 
 import { BackupController } from './backup.controller.js';
 import { BackupService } from './backup.service.js';
@@ -18,24 +17,28 @@ const DEFAULT_RESTORE_LIMIT_MB = 256;
   providers: [BackupService],
   exports: [BackupService],
 })
-export class BackupModule implements NestModule {
-  constructor(private readonly config: ConfigService) {}
+export class BackupModule {}
 
-  /**
-   * Restore and inspect carry a whole archive in the request body, which is far
-   * past the 100 kB the global JSON parser allows. The larger limit is applied
-   * to these two routes only — raising it globally would let any endpoint be
-   * used to buffer hundreds of megabytes.
-   */
-  configure(consumer: MiddlewareConsumer): void {
-    const limitMb = parseLimitMb(this.config.get<string>('BACKUP_MAX_UPLOAD_MB'));
-    consumer
-      .apply(express.json({ limit: `${limitMb}mb` }))
-      .forRoutes(
-        { path: 'backup/restore', method: RequestMethod.POST },
-        { path: 'backup/inspect', method: RequestMethod.POST },
-      );
-  }
+/**
+ * Restore and inspect carry a whole archive in the request body, which is far
+ * past the 100 kB the global JSON parser allows. The larger limit is applied to
+ * these two routes only: raising it globally would let any endpoint be used to
+ * buffer hundreds of megabytes.
+ *
+ * Call this before the app initializes. Nest registers its global parser ahead
+ * of module middleware, so a limit set in a module never sees these bodies.
+ */
+export function registerBackupBodyParser(
+  app: INestApplication,
+  apiPrefix: string,
+  limitMb: number,
+): void {
+  const parser = express.json({ limit: `${limitMb}mb` });
+  // The wrapper matters: Nest skips its own parser if it finds a middleware
+  // named jsonParser, which would leave every other route without a body.
+  const parseArchive: RequestHandler = (req, res, next) => parser(req, res, next);
+  app.use(`/${apiPrefix}/backup/restore`, parseArchive);
+  app.use(`/${apiPrefix}/backup/inspect`, parseArchive);
 }
 
 export function parseLimitMb(value: string | undefined): number {
