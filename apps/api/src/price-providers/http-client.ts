@@ -21,6 +21,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_ATTEMPTS = 2;
 const RETRY_BASE_DELAY_MS = 400;
+const MAX_REDIRECTS = 3;
 
 export class HttpFetchError extends Error {
   constructor(
@@ -63,9 +64,8 @@ export class PriceHttpClient {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(url, {
+      const response = await fetchFollowingHttps(url, {
         signal: controller.signal,
-        redirect: 'follow',
         headers: { accept: 'application/json', ...options.headers },
       });
 
@@ -88,6 +88,28 @@ export class PriceHttpClient {
       clearTimeout(timer);
     }
   }
+}
+
+/**
+ * Follows redirects by hand so each hop can be checked. Every bundled provider
+ * is HTTPS, and this process sits on the network with plain-HTTP MinIO and the
+ * cloud metadata service, so an upstream must not be able to send it there.
+ */
+async function fetchFollowingHttps(url: string, init: RequestInit): Promise<Response> {
+  let target = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+    const response = await fetch(target, { ...init, redirect: 'manual' });
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location = response.headers.get('location');
+    if (!location) return response;
+    const next = new URL(location, target);
+    if (next.protocol !== 'https:') {
+      throw new HttpFetchError(`${redact(url)} redirected to a non-HTTPS target`);
+    }
+    target = next.toString();
+  }
+  throw new HttpFetchError(`${redact(url)} redirected too many times`);
 }
 
 /**

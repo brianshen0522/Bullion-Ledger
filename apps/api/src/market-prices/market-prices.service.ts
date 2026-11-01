@@ -99,7 +99,7 @@ export class MarketPricesService {
           baseCurrency: quote.baseCurrency,
           quoteCurrency: quote.quoteCurrency,
           rate: rate.toFixed(),
-          timestamp: quote.quotedAt,
+          timestamp: notAfterNow(quote.quotedAt),
           source: 'provider',
         },
       })
@@ -135,7 +135,7 @@ export class MarketPricesService {
       .create({
         data: {
           metalId: metal.id,
-          timestamp: quote.quotedAt,
+          timestamp: notAfterNow(quote.quotedAt),
           price: price.toFixed(),
           quoteCurrency: quote.quoteCurrency.toUpperCase(),
           quoteUnit: quote.quoteUnit,
@@ -475,6 +475,15 @@ export function contiguousRanges(days: readonly Date[]): [Date, Date][] {
   }
   ranges.push([start, previous]);
   return ranges;
+}
+
+/**
+ * Latest-price lookups order by timestamp, so one upstream quote dated ahead of
+ * the clock would outrank every real quote until that date passed.
+ */
+function notAfterNow(quotedAt: Date): Date {
+  const now = new Date();
+  return quotedAt.getTime() > now.getTime() ? now : quotedAt;
 }
 
 function isUniqueViolation(error: unknown): boolean {

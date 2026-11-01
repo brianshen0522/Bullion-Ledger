@@ -46,6 +46,44 @@ function build(options: { createRejects?: unknown; metal?: { id: string } | null
   return { service, prisma, providers, create };
 }
 
+describe('provider timestamps', () => {
+  it('stores a future-dated quote at the current time', async () => {
+    const { service, create } = build();
+    const before = Date.now();
+
+    await service.storeQuote(quote({ quotedAt: new Date('2999-01-01T00:00:00.000Z') }), 'gold-api');
+
+    const stored = create.mock.calls[0]![0].data.timestamp as Date;
+    expect(stored.getTime()).toBeGreaterThanOrEqual(before);
+    expect(stored.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('keeps a past quote time unchanged', async () => {
+    const { service, create } = build();
+    const quotedAt = new Date('2026-07-28T12:00:00.000Z');
+
+    await service.storeQuote(quote({ quotedAt }), 'gold-api');
+
+    expect(create.mock.calls[0]![0].data.timestamp).toEqual(quotedAt);
+  });
+
+  it('stores a future-dated FX rate at the current time', async () => {
+    const { service, prisma, providers } = build();
+    prisma.fxRateSnapshot.create.mockResolvedValue({ id: 'fx-1' });
+    providers.fetchFxRate.mockResolvedValue({
+      baseCurrency: 'USD',
+      quoteCurrency: 'TWD',
+      rate: '30.5',
+      quotedAt: new Date('2999-01-01T00:00:00.000Z'),
+    });
+
+    await service.syncFxRate();
+
+    const stored = prisma.fxRateSnapshot.create.mock.calls[0]![0].data.timestamp as Date;
+    expect(stored.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+});
+
 describe('recording a manual price (PRD §9)', () => {
   const input = {
     metalCode: 'XAU',
