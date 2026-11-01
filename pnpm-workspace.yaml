@@ -18,3 +18,12 @@ allowBuilds:
   # back to its JavaScript encoder, which is ample at this queue volume.
   msgpackr-extract: false
   prisma: true
+
+# Patched releases of transitive runtime dependencies, within the majors their
+# parents already accept. Drop an entry once the parent's own range covers it.
+overrides:
+  body-parser@1: ^1.20.9
+  lodash@4: ^4.17.24
+  multer@2: ^2.5.0
+  proxy-addr@2: ^2.0.8
+  qs@6: ^6.16.1
