@@ -46,6 +46,44 @@ function build(options: { createRejects?: unknown; metal?: { id: string } | null
   return { service, prisma, providers, create };
 }
 
+describe('recording a manual price (PRD §9)', () => {
+  const input = {
+    metalCode: 'XAU',
+    price: '100',
+    quoteCurrency: 'TWD',
+    quoteUnit: 'g' as const,
+  };
+
+  it('refuses a future-dated price, which would outrank every real quote', async () => {
+    const { service, prisma } = build();
+
+    await expect(
+      service.recordManualPrice({
+        ...input,
+        timestamp: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      }),
+    ).rejects.toThrow(/future/);
+    expect(prisma.spotPriceSnapshot.upsert).not.toHaveBeenCalled();
+  });
+
+  it('accepts a backdated price', async () => {
+    const { service, prisma } = build();
+    prisma.spotPriceSnapshot.upsert.mockResolvedValue({
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+      price: '100',
+      quoteCurrency: 'TWD',
+      quoteUnit: 'g',
+      normalizedPricePerGram: '100',
+      provider: 'manual',
+      sourceType: 'MANUAL',
+    });
+
+    await expect(
+      service.recordManualPrice({ ...input, timestamp: new Date('2026-01-01T00:00:00.000Z') }),
+    ).resolves.toMatchObject({ provider: 'manual' });
+  });
+});
+
 describe('storing a quote (PRD §12.4)', () => {
   it('normalizes a troy-ounce quote to price per gram before writing', async () => {
     const { service, create } = build();

@@ -109,9 +109,12 @@ export class PurchaseSnapshotService {
         // A re-run refreshes a snapshot captured before prices were backfilled.
         update: {
           quotePrice: quantizePrice(quote.pricePerGram).toFixed(),
+          quoteCurrency: quote.row.quoteCurrency,
           quotedAt: quote.row.timestamp,
           provider: quote.row.provider ?? 'unknown',
           fxRate: converted.fxRate?.toFixed() ?? null,
+          fxBaseCurrency: converted.fxRate ? quote.row.quoteCurrency : null,
+          fxQuoteCurrency: converted.fxRate ? purchase.currency : null,
           pricePerGram: quantizePrice(converted.pricePerGram).toFixed(),
           pricePerQian: quantizePrice(
             pricePerUnitFromGram(converted.pricePerGram, 'qian'),
@@ -172,6 +175,7 @@ export class PurchaseSnapshotService {
     // The stored FX rate is base→display; it only applies when the purchase is
     // in that display currency.
     if (purchaseCurrency.toUpperCase() !== this.market.displayCurrency) return null;
+    if (quoteCurrency.toUpperCase() !== this.market.priceBaseCurrency) return null;
     return { pricePerGram: pricePerGram.times(fxRate), fxRate };
   }
 }

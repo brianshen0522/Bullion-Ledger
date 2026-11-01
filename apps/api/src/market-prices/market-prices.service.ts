@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Decimal from 'decimal.js';
 import {
@@ -14,6 +14,9 @@ import {
 import { PrismaService } from '../prisma/prisma.module.js';
 import { PriceProviderRegistry } from '../price-providers/price-provider.registry.js';
 import type { MetalQuote } from '../price-providers/price-provider.interface.js';
+
+/** Clock skew tolerated on a hand-entered price before it counts as future-dated. */
+const MANUAL_PRICE_MAX_FUTURE_MS = 5 * 60 * 1000;
 
 export interface StoredPrice {
   metalCode: string;
@@ -63,6 +66,11 @@ export class MarketPricesService {
 
   get displayCurrency(): string {
     return this.quoteCurrency;
+  }
+
+  /** Currency the stored FX rate converts from. */
+  get priceBaseCurrency(): string {
+    return this.baseCurrency;
   }
 
   /** Fetches from the provider chain and stores whatever it returns. */
@@ -167,6 +175,11 @@ export class MarketPricesService {
     const price = quantizePrice(input.price);
     const perGram = quantizePrice(normalizePricePerGram(price, input.quoteUnit));
     const timestamp = input.timestamp ?? new Date();
+    // Latest-price and at-or-before lookups order by timestamp, so a row dated
+    // ahead of the clock would outrank every real quote until that date passes.
+    if (timestamp.getTime() > Date.now() + MANUAL_PRICE_MAX_FUTURE_MS) {
+      throw new BadRequestException('timestamp must not be in the future');
+    }
     const sourceType = assertPriceSourceType(input.sourceType ?? 'MANUAL');
 
     const row = await this.prisma.spotPriceSnapshot.upsert({

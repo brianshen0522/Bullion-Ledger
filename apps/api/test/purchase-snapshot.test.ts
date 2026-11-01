@@ -68,6 +68,7 @@ function harness(options: {
 
   const market = {
     displayCurrency: 'TWD',
+    priceBaseCurrency: 'USD',
     latestFxRate: vi
       .fn()
       .mockResolvedValue(
@@ -114,6 +115,16 @@ describe('purchase-time snapshot (PRD §9, §10.3)', () => {
     // 8784.4815 / 121215.5185 ≈ 7.247%.
     expect(args.create.premiumRate).toBe('0.07246994');
     expect(args.create.fxRate).toBe('32.327371');
+  });
+
+  it('skips a quote the stored FX rate cannot convert', async () => {
+    // The rate is USD→TWD; applied to a EUR quote it would invent a premium.
+    const { service, upsert } = harness({ quoteCurrency: 'EUR' });
+
+    const result = await service.capture('purchase-1');
+
+    expect(result.skipped).toEqual(['XAU']);
+    expect(upsert).not.toHaveBeenCalled();
   });
 
   it('records the per-qian price Taiwanese dealers actually quote', async () => {
