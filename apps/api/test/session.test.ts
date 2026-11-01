@@ -4,6 +4,21 @@ import { Response } from 'express';
 import { describe, expect, it, vi } from 'vitest';
 
 import { SessionService } from '../src/auth/session.service';
+import { SessionTokenHasher } from '../src/auth/session-token-hasher.service';
+
+describe('SessionTokenHasher secret', () => {
+  const placeholder = 'replace_with_long_random_value_at_least_32_chars_long_xxxxxx';
+
+  it('refuses the .env.example placeholder in production', () => {
+    const env = config({ NODE_ENV: 'production', SESSION_SECRET: placeholder });
+    expect(() => new SessionTokenHasher(env)).toThrow(/placeholder/);
+  });
+
+  it('still accepts it for local development', () => {
+    const env = config({ NODE_ENV: 'development', SESSION_SECRET: placeholder });
+    expect(() => new SessionTokenHasher(env)).not.toThrow();
+  });
+});
 
 function config(values: Record<string, string> = {}): ConfigService {
   return {

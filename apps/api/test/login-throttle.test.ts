@@ -92,6 +92,47 @@ describe('LoginThrottleService', () => {
     expect(() => s.consume('alice', '192.0.2.5')).not.toThrow();
   });
 
+  it('counts attempts still being verified, so a parallel burst cannot outrun failures', () => {
+    const s = makeService(3, 60);
+    s.consume('alice', '192.0.2.5');
+    s.consume('alice', '192.0.2.5');
+    s.consume('alice', '192.0.2.5');
+
+    expect(() => s.consume('alice', '192.0.2.5')).toThrow(LockedError);
+    expect(() => s.consume('bob', '192.0.2.5')).toThrow(LockedError);
+  });
+
+  it('does not charge a bucket for the attempt that was rejected', () => {
+    const s = makeService(1, 60);
+    s.consume('alice', '192.0.2.5');
+    expect(() => s.consume('alice', '192.0.2.6')).toThrow(LockedError);
+
+    s.release('alice', '192.0.2.5');
+    expect(() => s.consume('alice', '192.0.2.6')).not.toThrow();
+  });
+
+  it('gives a released attempt back without recording a failure', () => {
+    const s = makeService(2, 60);
+    s.consume('alice');
+    s.consume('alice');
+    s.release('alice');
+    s.release('alice');
+
+    const internals = s as unknown as { store: Map<string, unknown> };
+    expect(internals.store.size).toBe(0);
+  });
+
+  it('settles the reservation when an attempt fails', () => {
+    const s = makeService(3, 60);
+    s.consume('alice');
+    s.recordFailure('alice');
+    s.consume('alice');
+    s.recordFailure('alice');
+
+    expect(() => s.consume('alice')).not.toThrow();
+    expect(() => s.consume('alice')).toThrow(LockedError);
+  });
+
   it('keeps attacker-controlled bucket storage bounded', () => {
     const s = makeService(3, 60);
     for (let i = 0; i < 5_100; i += 1) {

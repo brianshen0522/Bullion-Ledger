@@ -7,6 +7,8 @@ interface AttemptRecord {
   windowStart: number;
   failures: number;
   lockedUntil: number | null;
+  /** Attempts admitted by consume() whose verification has not finished. */
+  inFlight: number;
 }
 
 const MAX_BUCKETS = 10_000;
@@ -38,21 +40,44 @@ export class LoginThrottleService {
     }
   }
 
-  /** Throws LockedError if either the account or source-IP bucket is locked. */
+  /**
+   * Admits one attempt, or throws LockedError if a bucket is locked or already
+   * has its remaining attempts in flight. Argon2 takes long enough that failures
+   * alone would let a parallel burst through before the first one is counted,
+   * so the attempt is reserved here, synchronously. Every admitted attempt must
+   * end in recordFailure, recordSuccess, or release.
+   */
   consume(username: string, ip?: string): void {
     const now = Date.now();
     this.maybePruneExpired(now);
 
+    const keys = this.bucketKeys(username, ip);
     let retryAfterSeconds = 0;
-    for (const key of this.bucketKeys(username, ip)) {
+    for (const key of keys) {
       const rec = this.refreshExisting(key, now);
       if (rec?.lockedUntil && rec.lockedUntil > now) {
         retryAfterSeconds = Math.max(retryAfterSeconds, Math.ceil((rec.lockedUntil - now) / 1000));
+      } else if (rec && rec.failures + rec.inFlight >= this.maxAttempts) {
+        retryAfterSeconds = Math.max(retryAfterSeconds, 1);
       }
     }
 
     if (retryAfterSeconds > 0) {
       throw new LockedError(retryAfterSeconds);
+    }
+
+    for (const key of keys) {
+      this.getOrCreate(key, now).inFlight += 1;
+    }
+  }
+
+  /** Ends an admitted attempt that never reached a verdict on the credential. */
+  release(username: string, ip?: string): void {
+    for (const key of this.bucketKeys(username, ip)) {
+      const rec = this.store.get(key);
+      if (!rec) continue;
+      rec.inFlight = Math.max(0, rec.inFlight - 1);
+      if (rec.inFlight === 0 && rec.failures === 0 && !rec.lockedUntil) this.store.delete(key);
     }
   }
 
@@ -62,6 +87,7 @@ export class LoginThrottleService {
 
     for (const key of this.bucketKeys(username, ip)) {
       const rec = this.getOrCreate(key, now);
+      rec.inFlight = Math.max(0, rec.inFlight - 1);
       rec.failures += 1;
       if (rec.failures >= this.maxAttempts) {
         rec.lockedUntil = now + this.windowSec * 1000;
@@ -103,6 +129,7 @@ export class LoginThrottleService {
       windowStart: now,
       failures: 0,
       lockedUntil: null,
+      inFlight: 0,
     };
     this.store.set(key, fresh);
     return fresh;

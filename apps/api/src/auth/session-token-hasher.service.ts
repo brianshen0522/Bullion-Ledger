@@ -18,6 +18,13 @@ export class SessionTokenHasher {
         'SESSION_SECRET must be set and at least 32 characters. Copy .env.example to .env.',
       );
     }
+    // The .env.example value is long enough to pass the check above but public.
+    if (
+      configService.get<string>('NODE_ENV') === 'production' &&
+      secret.startsWith('replace_with')
+    ) {
+      throw new Error('SESSION_SECRET still has the .env.example placeholder value.');
+    }
     this.secret = secret;
   }
 

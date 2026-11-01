@@ -221,14 +221,21 @@ export class PasskeysService {
   ): Promise<{ username: string }> {
     this.enforceThrottle(httpResponse, context.ip);
 
-    const pending = await this.challenges.consume(
-      challengeId,
-      WebAuthnChallengePurpose.AUTHENTICATION,
-      null,
-    );
-    if (!pending) throw new BadRequestException('Passkey challenge expired or already used');
+    let asserted: Awaited<ReturnType<PasskeysService['assertCredential']>>;
+    try {
+      const pending = await this.challenges.consume(
+        challengeId,
+        WebAuthnChallengePurpose.AUTHENTICATION,
+        null,
+      );
+      if (!pending) throw new BadRequestException('Passkey challenge expired or already used');
+      asserted = await this.assertCredential(response, pending.challenge);
+    } catch (error) {
+      this.throttle.release(PASSKEY_THROTTLE_ACCOUNT, context.ip);
+      throw error;
+    }
 
-    const { credential, verification } = await this.assertCredential(response, pending.challenge);
+    const { credential, verification } = asserted;
     if (!credential || !verification) {
       this.throttle.recordFailure(PASSKEY_THROTTLE_ACCOUNT, context.ip);
       await this.audit.record({

@@ -88,12 +88,18 @@ export class AuthService {
       throw e;
     }
 
-    const user = await this.prisma.appUser.findUnique({ where: { username: dto.username } });
+    let user: Awaited<ReturnType<typeof this.prisma.appUser.findUnique>>;
     let ok = false;
-    if (user) {
-      ok = await this.passwords.verify(user.passwordHash, dto.password);
-    } else {
-      await this.passwords.verify(DUMMY_LOGIN_HASH, dto.password);
+    try {
+      user = await this.prisma.appUser.findUnique({ where: { username: dto.username } });
+      if (user) {
+        ok = await this.passwords.verify(user.passwordHash, dto.password);
+      } else {
+        await this.passwords.verify(DUMMY_LOGIN_HASH, dto.password);
+      }
+    } catch (error) {
+      this.throttle.release(dto.username, ip);
+      throw error;
     }
 
     if (!user || !ok) {
