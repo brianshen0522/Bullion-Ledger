@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.module.js';
 import { StorageService } from '../storage/storage.service.js';
@@ -12,10 +13,8 @@ import {
   sha256Hex,
   type BackupEntry,
 } from './backup-format.js';
-import { openBackup, sealBackup } from './backup-crypto.js';
+import { MAX_RESTORE_BYTES, openBackup, sealBackup } from './backup-crypto.js';
 
-/** Ceiling on a restorable archive, to bound memory during import. */
-const MAX_RESTORE_BYTES = 2 * 1024 * 1024 * 1024;
 const MANIFEST_ENTRY = 'manifest.json';
 const OBJECT_PREFIX = 'objects/';
 
@@ -26,6 +25,7 @@ const OBJECT_PREFIX = 'objects/';
 const TABLES = [
   'appUser',
   'userPasskey',
+  'purchaseIntake',
   'metal',
   'organization',
   'organizationAlias',
@@ -88,14 +88,21 @@ export class BackupService {
   async export(passphrase: string, context: AuditContext = {}): Promise<Buffer> {
     const tables: Record<string, unknown[]> = {};
     const counts: Record<string, number> = {};
-    for (const table of TABLES) {
-      const rows = await this.readTable(table);
-      tables[table] = rows;
-      counts[table] = rows.length;
-    }
+    // One snapshot across every table: read separately, a movement committed
+    // mid-export could land in the archive without the balance it changed.
+    await this.prisma.$transaction(
+      async (tx) => {
+        for (const table of TABLES) {
+          const rows = await delegateFor(tx, table).findMany({});
+          tables[table] = rows;
+          counts[table] = rows.length;
+        }
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 120_000 },
+    );
 
     // Every stored object referenced by an attachment or one of its variants.
-    const keys = await this.objectKeys();
+    const keys = objectKeys(tables);
     const objectEntries: Buffer[] = [];
     const objects: BackupManifest['objects'] = [];
     for (const key of keys) {
@@ -160,6 +167,7 @@ export class BackupService {
     context: AuditContext = {},
   ): Promise<RestoreSummary> {
     const { manifest, objects } = await this.parse(file, passphrase);
+    const archived = withoutUnrestorableIntakeLinks(manifest.tables);
 
     const restoredTables: Record<string, number> = {};
     await this.prisma.$transaction(
@@ -173,14 +181,14 @@ export class BackupService {
         await tx.webAuthnChallenge.deleteMany({});
 
         for (const table of TABLES) {
-          const rows = manifest.tables[table] ?? [];
+          const rows = archived[table] ?? [];
           if (rows.length === 0) {
             restoredTables[table] = 0;
             continue;
           }
           for (const row of rows) {
             await delegateFor(tx, table).create({
-              data: reviveDates(row as Record<string, unknown>),
+              data: reviveDates(row as Record<string, unknown>, table),
             });
           }
           restoredTables[table] = rows.length;
@@ -272,6 +280,9 @@ export class BackupService {
     if (manifest.formatVersion !== 1) {
       throw new BadRequestException(`backup manifest v${manifest.formatVersion} is not supported`);
     }
+    if (!manifest.tables || typeof manifest.tables !== 'object') {
+      throw new BadRequestException('backup manifest has no table data');
+    }
 
     const objects = new Map<string, Buffer>();
     for (const entry of entries) {
@@ -287,22 +298,6 @@ export class BackupService {
     return { manifest, objects };
   }
 
-  private async readTable(table: TableName): Promise<unknown[]> {
-    return delegateFor(this.prisma, table).findMany({});
-  }
-
-  private async objectKeys(): Promise<string[]> {
-    const [attachments, variants] = await Promise.all([
-      this.prisma.attachment.findMany({ select: { storageKey: true } }),
-      this.prisma.attachmentVariant.findMany({ select: { storageKey: true } }),
-    ]);
-    const keys = new Set<string>();
-    for (const row of [...attachments, ...variants]) {
-      if (isSafeObjectKey(row.storageKey)) keys.add(row.storageKey);
-    }
-    return [...keys];
-  }
-
   /** Revokes every session, used after a restore replaces the account row. */
   async revokeAllSessions(): Promise<void> {
     await this.prisma.userSession.updateMany({
@@ -311,6 +306,39 @@ export class BackupService {
     });
     void this.sessions;
   }
+}
+
+function objectKeys(tables: Record<string, unknown[]>): string[] {
+  const rows = [...(tables.attachment ?? []), ...(tables.attachmentVariant ?? [])] as {
+    storageKey: string;
+  }[];
+  return [...new Set(rows.map((row) => row.storageKey).filter(isSafeObjectKey))];
+}
+
+/**
+ * Archives written before intakes were captured still reference them. Nothing
+ * can satisfy those foreign keys, which made such a file impossible to restore,
+ * so the purchase keeps its record without the link and attachments of an
+ * unfinished draft stay out. A finalized purchase's own files are unaffected.
+ */
+export function withoutUnrestorableIntakeLinks(
+  tables: Record<string, unknown[]>,
+): Record<string, unknown[]> {
+  if (tables.purchaseIntake !== undefined) return tables;
+
+  const attachments = (tables.attachment ?? []) as { id: string; intakeId?: string | null }[];
+  const dropped = new Set(attachments.filter((row) => row.intakeId).map((row) => row.id));
+  return {
+    ...tables,
+    purchase: ((tables.purchase ?? []) as Record<string, unknown>[]).map((row) => ({
+      ...row,
+      sourceIntakeId: null,
+    })),
+    attachment: attachments.filter((row) => !dropped.has(row.id)),
+    attachmentVariant: ((tables.attachmentVariant ?? []) as { attachmentId: string }[]).filter(
+      (row) => !dropped.has(row.attachmentId),
+    ),
+  };
 }
 
 /**
@@ -332,16 +360,32 @@ interface PrismaDelegate {
 
 type PrismaDelegates = Record<string, PrismaDelegate>;
 
-/** ISO-8601 strings in the archive are Date columns in the schema. */
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+/** Scalar column types for a table, from the schema Prisma was generated with. */
+function columnTypes(table: TableName): Map<string, string> {
+  const model = Prisma.dmmf.datamodel.models.find(
+    ({ name }) => name.toLowerCase() === table.toLowerCase(),
+  );
+  if (!model) throw new Error(`No Prisma model for table "${table}"`);
+  return new Map(model.fields.map(({ name, type }) => [name, type]));
+}
 
-export function reviveDates(row: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Turns JSON values back into what Prisma expects. The schema decides, not the
+ * shape of the value: free text that happens to read as a timestamp must stay
+ * text, and an SQL NULL in a Json column is expressed by leaving the field out.
+ */
+export function reviveDates(
+  row: Record<string, unknown>,
+  table: TableName,
+): Record<string, unknown> {
+  const columns = columnTypes(table);
   const revived: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) {
-    if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
+    if (typeof value === 'string' && columns.get(key) === 'DateTime') {
       revived[key] = new Date(value);
       continue;
     }
+    if (value === null && columns.get(key) === 'Json') continue;
     // Prisma `Bytes` round-trips through JSON as base64.
     if (
       value !== null &&

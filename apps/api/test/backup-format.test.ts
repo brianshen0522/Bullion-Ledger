@@ -12,7 +12,7 @@ import {
   isSafeObjectKey,
 } from '../src/backup/backup-format';
 import { openBackup, sealBackup } from '../src/backup/backup-crypto';
-import { reviveDates } from '../src/backup/backup.service';
+import { reviveDates, withoutUnrestorableIntakeLinks } from '../src/backup/backup.service';
 
 const PASSPHRASE = 'a-sufficiently-long-passphrase';
 
@@ -160,19 +160,60 @@ describe('sealed archives', () => {
 
 describe('restoring typed columns from JSON', () => {
   it('revives ISO timestamps into Dates', () => {
-    const revived = reviveDates({ createdAt: '2026-07-29T10:00:00.000Z', name: 'not a date' });
+    const revived = reviveDates(
+      { createdAt: '2026-07-29T10:00:00.000Z', name: 'not a date' },
+      'purchase',
+    );
     expect(revived.createdAt).toBeInstanceOf(Date);
     expect(revived.name).toBe('not a date');
   });
 
   it('revives a serialized Buffer, as passkey public keys are stored', () => {
-    const revived = reviveDates({ publicKey: { type: 'Buffer', data: [1, 2, 3] } });
+    const revived = reviveDates({ publicKey: { type: 'Buffer', data: [1, 2, 3] } }, 'userPasskey');
     expect(Buffer.isBuffer(revived.publicKey)).toBe(true);
     expect((revived.publicKey as Buffer).equals(Buffer.from([1, 2, 3]))).toBe(true);
   });
 
+  it('keeps free text that reads like a timestamp as text', () => {
+    const note = '2026-07-29T10:00:00.000Z';
+    expect(reviveDates({ notes: note }, 'purchase')).toEqual({ notes: note });
+  });
+
+  it('omits an empty Json column, which Prisma refuses as a bare null', () => {
+    const revived = reviveDates({ id: 'row', raw: null }, 'spotPriceSnapshot');
+    expect(revived).toEqual({ id: 'row' });
+  });
+
   it('leaves ordinary values untouched', () => {
-    const revived = reviveDates({ count: 5, flag: true, missing: null, text: '2026' });
+    const revived = reviveDates({ count: 5, flag: true, missing: null, text: '2026' }, 'purchase');
     expect(revived).toEqual({ count: 5, flag: true, missing: null, text: '2026' });
+  });
+});
+
+describe('archives without intake data', () => {
+  const legacy = {
+    purchase: [{ id: 'purchase-1', sourceIntakeId: 'intake-1' }],
+    attachment: [
+      { id: 'kept', intakeId: null, purchaseId: 'purchase-1' },
+      { id: 'draft', intakeId: 'intake-2' },
+    ],
+    attachmentVariant: [
+      { id: 'variant-1', attachmentId: 'kept' },
+      { id: 'variant-2', attachmentId: 'draft' },
+    ],
+  };
+
+  it('drops links nothing in the archive can satisfy', () => {
+    const tables = withoutUnrestorableIntakeLinks(legacy);
+
+    expect(tables.purchase).toEqual([{ id: 'purchase-1', sourceIntakeId: null }]);
+    expect(tables.attachment).toEqual([legacy.attachment[0]]);
+    expect(tables.attachmentVariant).toEqual([legacy.attachmentVariant[0]]);
+  });
+
+  it('leaves an archive that carries its intakes alone', () => {
+    const current = { ...legacy, purchaseIntake: [{ id: 'intake-1' }, { id: 'intake-2' }] };
+
+    expect(withoutUnrestorableIntakeLinks(current)).toBe(current);
   });
 });

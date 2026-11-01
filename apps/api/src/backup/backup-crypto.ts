@@ -32,6 +32,9 @@ const KEY_BYTES = 32;
 
 export const MIN_PASSPHRASE_LENGTH = 12;
 
+/** Ceiling on a restorable archive, to bound memory during import. */
+export const MAX_RESTORE_BYTES = 2 * 1024 * 1024 * 1024;
+
 export async function deriveKey(passphrase: string, header: BackupHeader): Promise<Buffer> {
   return argon2.hash(passphrase, {
     type: argon2.argon2id,
@@ -99,7 +102,8 @@ export async function openBackup(file: Buffer, passphrase: string): Promise<Buff
   }
 
   try {
-    return gunzipSync(plaintext);
+    // Compression can expand far past the upload limit that bounded the file.
+    return gunzipSync(plaintext, { maxOutputLength: MAX_RESTORE_BYTES });
   } catch {
     throw new BackupFormatError('backup payload could not be decompressed');
   }
