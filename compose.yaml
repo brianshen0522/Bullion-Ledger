@@ -119,10 +119,18 @@ services:
       PRICE_BASE_CURRENCY: ${PRICE_BASE_CURRENCY:-USD}
       DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-TWD}
       BACKUP_MAX_UPLOAD_MB: ${BACKUP_MAX_UPLOAD_MB:-256}
+    # The code needs no privileges, so a compromise of it should inherit none.
+    # DAC_OVERRIDE stays so a checkout with tight file modes remains readable.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
     volumes:
-      - ./apps/api/src:/workspace/apps/api/src
-      - ./apps/api/prisma:/workspace/apps/api/prisma
-      - ./packages/shared/src:/workspace/packages/shared/src
+      - ./apps/api/src:/workspace/apps/api/src:ro
+      - ./apps/api/prisma:/workspace/apps/api/prisma:ro
+      - ./packages/shared/src:/workspace/packages/shared/src:ro
     networks:
       - gateway-api
       - backend
@@ -175,13 +183,22 @@ services:
       PRICE_HOURLY_CRON: ${PRICE_HOURLY_CRON:-}
       PRICE_DAILY_CRON: ${PRICE_DAILY_CRON:-}
       PRICE_BACKFILL_DAYS: ${PRICE_BACKFILL_DAYS:-365}
+    # The code needs no privileges, so a compromise of it should inherit none.
+    # DAC_OVERRIDE stays so a checkout with tight file modes remains readable.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
     volumes:
-      - ./apps/api/src:/workspace/apps/api/src
-      - ./apps/api/prisma:/workspace/apps/api/prisma
-      - ./packages/shared/src:/workspace/packages/shared/src
+      - ./apps/api/src:/workspace/apps/api/src:ro
+      - ./apps/api/prisma:/workspace/apps/api/prisma:ro
+      - ./packages/shared/src:/workspace/packages/shared/src:ro
     networks:
       # `backend` is internal, so egress must be granted explicitly. The worker
-      # is the only process that calls a third-party price API.
+      # is the process that calls third-party price APIs on a schedule; a manual
+      # POST /market/sync makes the same calls from the API container.
       - backend
       - egress
     working_dir: /workspace/apps/api
@@ -220,10 +237,18 @@ services:
     environment:
       API_URL: http://api:3000
       GATEWAY_SERVER_NAME: ${GATEWAY_SERVER_NAME:-}
+    # The code needs no privileges, so a compromise of it should inherit none.
+    # DAC_OVERRIDE stays so a checkout with tight file modes remains readable.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
     volumes:
-      - ./apps/web/src:/workspace/apps/web/src
-      - ./apps/web/index.html:/workspace/apps/web/index.html
-      - ./packages/shared/src:/workspace/packages/shared/src
+      - ./apps/web/src:/workspace/apps/web/src:ro
+      - ./apps/web/index.html:/workspace/apps/web/index.html:ro
+      - ./packages/shared/src:/workspace/packages/shared/src:ro
     networks:
       - gateway-web
     working_dir: /workspace/apps/web

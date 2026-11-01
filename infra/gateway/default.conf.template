@@ -1,6 +1,8 @@
+# WebSocket is the only upgrade anything here serves (Vite HMR). Passing others
+# on would let a client try h2c against whatever sits behind the gateway.
 map $http_upgrade $connection_upgrade {
-  default upgrade;
-  '' close;
+  default close;
+  ~*^websocket$ upgrade;
 }
 
 map $http_x_forwarded_proto $forwarded_proto {
