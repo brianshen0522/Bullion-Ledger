@@ -103,6 +103,14 @@ describe('object key safety', () => {
     expect(isSafeObjectKey('a/../../b')).toBe(false);
   });
 
+  it('accepts dots inside a name but not dot segments', () => {
+    // Keys keep the upload's filename, and a file called receipt..final.jpg
+    // must not vanish from the backup.
+    expect(isSafeObjectKey('intakes/u/i/id/receipt..final.jpg')).toBe(true);
+    expect(isSafeObjectKey('a/./b')).toBe(false);
+    expect(isSafeObjectKey('a/..')).toBe(false);
+  });
+
   it('rejects backslashes, nulls, and empty keys', () => {
     expect(isSafeObjectKey('a\\b')).toBe(false);
     expect(isSafeObjectKey('a\0b')).toBe(false);

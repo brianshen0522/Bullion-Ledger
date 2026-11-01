@@ -1193,13 +1193,19 @@ function validatePdfAndEstimatePages(bytes: Uint8Array): number | null {
 }
 
 function buildStorageKey(userId: string, intakeId: string, filename: string): string {
-  const safe = filename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128) || 'upload';
+  const safe = safeObjectName(filename);
   return `intakes/${safeSegment(userId)}/${safeSegment(intakeId)}/${randomUUID()}/${safe}`;
 }
 
 function buildAssetStorageKey(userId: string, assetId: string, filename: string): string {
-  const safe = filename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128) || 'upload';
+  const safe = safeObjectName(filename);
   return `assets/${safeSegment(userId)}/${safeSegment(assetId)}/${randomUUID()}/${safe}`;
+}
+
+/** A name made only of dots would be a path segment, not a file name. */
+function safeObjectName(filename: string): string {
+  const safe = filename.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 128);
+  return /^\.*$/.test(safe) ? 'upload' : safe;
 }
 
 function buildVariantStorageKey(attachmentId: string, kind: AttachmentVariantKind): string {

@@ -8,6 +8,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import { readBoundedRawBody } from '../src/attachments/attachments.controller';
+import { isSafeObjectKey } from '../src/backup/backup-format';
 import { AttachmentsService } from '../src/attachments/attachments.service';
 
 function png(width = 2, height = 3): Uint8Array {
@@ -231,6 +232,24 @@ describe('AttachmentsService', () => {
     await service.upload(uploadInput("UTF-8''%E9%87%91%E6%A2%9D%E6%AD%A3%E9%9D%A2.png"));
 
     expect(getStored()).toEqual(expect.objectContaining({ filename: '金條正面.png' }));
+  });
+
+  it('never builds a storage key ending in a dot segment', async () => {
+    const { service, storage } = harness();
+
+    await service.upload(uploadInput('..'));
+
+    const { storageKey } = storage.putObject.mock.calls[0]![0] as { storageKey: string };
+    expect(storageKey.split('/').pop()).toBe('upload');
+  });
+
+  it('keeps inner dots in a storage key so backups still include the object', async () => {
+    const { service, storage } = harness();
+
+    await service.upload(uploadInput('receipt..final.png'));
+
+    const { storageKey } = storage.putObject.mock.calls[0]![0] as { storageKey: string };
+    expect(isSafeObjectKey(storageKey)).toBe(true);
   });
 
   it('counts retained soft-deleted originals toward the intake storage quota', async () => {

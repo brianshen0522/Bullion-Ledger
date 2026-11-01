@@ -172,7 +172,11 @@ export function decodeEntries(payload: Buffer, maxTotalBytes: number): BackupEnt
  */
 export function isSafeObjectKey(key: string): boolean {
   if (key.length === 0 || key.length > 512) return false;
-  if (key.startsWith('/') || key.includes('..')) return false;
+  // Only a whole dot segment can climb a path. Dots inside a name are ordinary,
+  // and refusing them dropped such files from backups without saying so.
+  if (key.startsWith('/') || key.split('/').some((part) => part === '.' || part === '..')) {
+    return false;
+  }
   if (key.includes('\\') || key.includes('\0')) return false;
   return /^[A-Za-z0-9._\-/]+$/.test(key);
 }
