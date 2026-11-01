@@ -23,6 +23,7 @@ function harness(before: typeof STORED | null = STORED) {
       update: vi.fn().mockResolvedValue(undefined),
     },
     asset: { updateMany: vi.fn().mockResolvedValue({ count: 2 }) },
+    assetMovement: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     purchasePriceSnapshot: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
   };
   const prisma = {
@@ -117,6 +118,17 @@ describe('PurchasesService.update currency correction', () => {
     // multi-currency ledger and suppress the dashboard's P&L.
     expect(tx.asset.updateMany).toHaveBeenCalledWith({
       where: { purchaseId: 'purchase-1' },
+      data: { currency: 'USD', version: { increment: 1 } },
+    });
+  });
+
+  it('relabels realized figures already booked from those holdings', async () => {
+    const { service, tx } = harness();
+
+    await service.update('purchase-1', { currency: 'USD' }, {});
+
+    expect(tx.assetMovement.updateMany).toHaveBeenCalledWith({
+      where: { asset: { purchaseId: 'purchase-1' }, currency: { not: null } },
       data: { currency: 'USD' },
     });
   });

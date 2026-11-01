@@ -164,7 +164,18 @@ export class PurchasesService {
         // Every holding from this purchase carries a copy of the currency, and
         // leaving them behind would read as a genuinely multi-currency ledger,
         // which suppresses the dashboard's P&L (PRD §10.4).
-        await tx.asset.updateMany({ where: { purchaseId: id }, data: { currency } });
+        // The version bump stops a disposal that already read the old currency
+        // from committing its movement under the wrong label.
+        await tx.asset.updateMany({
+          where: { purchaseId: id },
+          data: { currency, version: { increment: 1 } },
+        });
+        // Sales already booked from these lots were priced against the same
+        // mislabelled figures, so realized P&L has to move with them.
+        await tx.assetMovement.updateMany({
+          where: { asset: { purchaseId: id }, currency: { not: null } },
+          data: { currency },
+        });
         // The stored snapshot's per-gram price, intrinsic value and premium are
         // all expressed in the old currency. They are not convertible after the
         // fact — the FX rate that applied on the purchase date is what matters —

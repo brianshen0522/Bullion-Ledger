@@ -203,16 +203,16 @@ export class AssetsService {
         throw new BadRequestException('No changes provided');
       }
 
-      if (assetChanged) {
-        const { count } = await tx.asset.updateMany({
-          where: { id, version: before.version },
-          data: { ...data, version: { increment: 1 } },
-        });
-        if (count === 0) {
-          throw new ConflictException(
-            `Asset ${id} was updated by another request; refresh and retry`,
-          );
-        }
+      // Item-only edits take the same version guard: they are an edit of this
+      // holding, and without it two stale tabs could both pass the check above.
+      const { count } = await tx.asset.updateMany({
+        where: { id, version: before.version },
+        data: { ...(assetChanged ? data : {}), version: { increment: 1 } },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          `Asset ${id} was updated by another request; refresh and retry`,
+        );
       }
 
       if (itemChanged && before.purchaseItemId) {

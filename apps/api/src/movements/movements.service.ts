@@ -104,6 +104,11 @@ export class MovementsService {
         select: { id: true, storageLocation: true, version: true, status: true },
       });
       if (!asset) throw new NotFoundException('Asset not found');
+      // A disposed lot is no longer in anyone's vault; moving it would append a
+      // ledger event for metal the holding says has already left.
+      if (asset.status !== 'HELD') {
+        throw new ConflictException(`Asset is already ${asset.status.toLowerCase()}`);
+      }
 
       const updated = await tx.asset.updateMany({
         where: { id: asset.id, version: asset.version },
@@ -148,6 +153,7 @@ export class MovementsService {
     if (!metal.active) throw new BadRequestException(`Metal ${input.metalCode} is inactive`);
 
     const unitGrams = quantizeWeightGrams(toGrams(input.unitWeight, input.weightUnit));
+    if (unitGrams.lte(0)) throw new BadRequestException('unitWeight must be > 0');
     const purity = new Decimal(input.purity);
     if (!purity.gt(0) || purity.gt(1)) {
       throw new BadRequestException('purity must be greater than 0 and at most 1');
@@ -229,6 +235,7 @@ export class MovementsService {
           select: {
             id: true,
             serial: true,
+            currency: true,
             metal: { select: { code: true, name: true } },
             product: { select: { name: true } },
             purchaseItem: { select: { name: true } },
@@ -253,7 +260,9 @@ export class MovementsService {
       costBasis: row.costBasis?.toString() ?? null,
       realizedPnl: row.realizedPnl?.toString() ?? null,
       marketValue: row.marketValue?.toString() ?? null,
-      currency: row.currency ?? row.marketCurrency,
+      // Realized figures are in the lot's currency, never the market's.
+      currency:
+        row.currency ?? (row.realizedPnl === null ? row.marketCurrency : row.asset.currency),
       fromStorageLocation: row.fromStorageLocation,
       toStorageLocation: row.toStorageLocation,
       notes: row.notes,
@@ -268,13 +277,14 @@ export class MovementsService {
   }> {
     const rows = await this.prisma.assetMovement.findMany({
       where: { realizedPnl: { not: null } },
-      select: { realizedPnl: true, currency: true, marketCurrency: true },
+      select: { realizedPnl: true, currency: true, asset: { select: { currency: true } } },
     });
     if (rows.length === 0) return { amount: null, currency: null, currencies: [] };
 
-    const currencies = [
-      ...new Set(rows.map((row) => row.currency ?? row.marketCurrency ?? 'UNKNOWN')),
-    ].sort();
+    // A loss has no sale currency, but it destroys cost held in the lot's
+    // currency. The market currency only describes `marketValue`, and summing
+    // under that label would add unlike amounts.
+    const currencies = [...new Set(rows.map((row) => row.currency ?? row.asset.currency))].sort();
     if (currencies.length !== 1) return { amount: null, currency: null, currencies };
 
     const total = rows.reduce(
@@ -336,7 +346,7 @@ export class MovementsService {
         throw error;
       }
 
-      const currency = sale ? (asset.currency ?? this.market.displayCurrency) : asset.currency;
+      const currency = asset.currency ?? this.market.displayCurrency;
       const saleResult = sale ? computeSale(sale.proceeds, sale.fees, split.costBasis) : null;
       // Losing metal destroys its cost; a gift does not (see booksRealizedPnl).
       const realizedPnl = saleResult
@@ -376,7 +386,8 @@ export class MovementsService {
           proceedsAmount: sale?.proceeds.toFixed(4) ?? null,
           fees: sale?.fees.toFixed(4) ?? null,
           netProceeds: saleResult?.netProceeds.toFixed(4) ?? null,
-          currency: sale ? currency : null,
+          // Any booked P&L is denominated in the lot's currency, sale or not.
+          currency: realizedPnl ? currency : null,
           costBasis: split.costBasis.toFixed(4),
           realizedPnl: realizedPnl?.toFixed(4) ?? null,
           spotPricePerGram: valuation?.pricePerGram.toFixed(6) ?? null,
@@ -428,7 +439,9 @@ export class MovementsService {
     let perGram = quote.pricePerGram;
     let currency = quoteCurrency;
     if (quoteCurrency !== display) {
-      if (!fx) return null;
+      // The stored rate is base→display; applied to any other quote currency it
+      // would produce a plausible but wrong cost basis.
+      if (!fx || quoteCurrency !== this.market.priceBaseCurrency) return null;
       perGram = perGram.times(fx.rate);
       currency = display;
     }

@@ -648,6 +648,24 @@ describe('AssetsService update', () => {
     );
   });
 
+  it('guards an edit of purchase-item fields alone with the version', async () => {
+    const { service, tx } = makeServiceWithTx();
+    const purchaseItem = { update: vi.fn() };
+    tx.purchaseItem = purchaseItem;
+    tx.asset.findUnique.mockResolvedValue(BASE_ASSET);
+    tx.asset.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.update('asset-1', { version: 1, packagingState: 'opened' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(tx.asset.updateMany).toHaveBeenCalledWith({
+      where: { id: 'asset-1', version: 1 },
+      data: { version: { increment: 1 } },
+    });
+    expect(purchaseItem.update).not.toHaveBeenCalled();
+  });
+
   it('rejects stale version with ConflictException', async () => {
     const { service, tx } = makeServiceWithTx();
     tx.asset.findUnique.mockResolvedValue({ ...BASE_ASSET, version: 2 });
